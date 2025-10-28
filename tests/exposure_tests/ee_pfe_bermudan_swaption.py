@@ -44,8 +44,8 @@ if __name__ == "__main__":
 
     metrics=[ee_metric, pfe_metric]
 
-    num_paths_mainsim=10000
-    num_paths_presim=10000
+    num_paths_mainsim=100000
+    num_paths_presim=100000
     num_steps=1
     sc=SimulationController(portfolio, 
                             model, 

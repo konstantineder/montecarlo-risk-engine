@@ -90,13 +90,21 @@ class SimulationController:
 
         # Pre-allocate array to store regression coefficients
         # for each product and exposure timepoint
-        self.regression_coeffs = [
-            [  
-                [torch.zeros(self.regression_function.get_degree(), device=device) for _ in range(prod.get_num_states())]
-                for _ in self.exposure_timeline
-            ]
-            for prod in portfolio
-        ]
+        self.regression_coeffs = []
+
+        degree = self.regression_function.get_degree()
+        num_time_points = len(self.exposure_timeline)
+
+        for prod in portfolio:
+            prod._allocate_regression_coeffs(self.regression_function)
+            num_states = prod.get_num_states()
+
+            coeffs_tensor = torch.zeros(
+                (num_time_points, num_states, degree),
+                dtype=FLOAT,          # <- match the rest of your code
+                device=device,
+            )
+            self.regression_coeffs.append(coeffs_tensor)
 
         # Set up requests for each exposure timepoint 
         self.numeraire_requests = {idx: AtomicRequest(AtomicRequestType.NUMERAIRE, t) for idx, t in enumerate(exposure_timeline)}
@@ -192,27 +200,34 @@ class SimulationController:
             t_next_idx = product_time_idx + 1 if product_timeline[product_time_idx] == t_reg else product_time_idx
 
             if t_next_idx < last_cf_index_computed:
-                if num_states == 1:
-                    total_cfs[:, 0] = cf_cache[last_cf_index_computed][:, 0]
-                    for idx in range(t_next_idx, last_cf_index_computed):
-                        _, cfs = product.compute_normalized_cashflows(
-                            idx, self.model, resolved_requests, self.regression_function
-                        )
-                        total_cfs[:, 0] += cfs
+                state_transition_matrix = torch.arange(
+                    num_states, device=device, dtype=torch.long
+                ).expand(num_paths, num_states).clone()              
 
-                    cf_cache[t_next_idx] = total_cfs.clone()
-                    last_cf_index_computed = t_next_idx
-                else:
-                    for state in range(num_states):
-                        current_state = torch.full((num_paths,), state, dtype=torch.long, device=device)
-                        for idx in range(t_next_idx, len(product.product_timeline)):
-                            current_state, cfs = product.compute_normalized_cashflows(
-                                idx, self.model, resolved_requests, self.regression_function, current_state
-                            )
-                            total_cfs[:, state] += cfs
+                step_value = torch.zeros((num_paths, num_states), device=device)
 
-                    cf_cache[t_next_idx] = total_cfs.clone()
-                    last_cf_index_computed = t_next_idx
+                # roll forward only the uncached window
+                for idx in range(t_next_idx, last_cf_index_computed):
+                    state_transition_matrix, cfs_matrix = product.compute_normalized_cashflows(
+                        idx,
+                        self.model,
+                        resolved_requests,
+                        self.regression_function,
+                        state_transition_matrix
+                    )
+                    step_value += cfs_matrix  
+
+                # stitch in cached tail from last_cf_index_computed
+                tail_value = cf_cache[last_cf_index_computed].gather(
+                    dim=1,
+                    index=state_transition_matrix
+                )
+
+                total_cfs = step_value + tail_value
+
+                cf_cache[t_next_idx] = total_cfs.clone()
+                last_cf_index_computed = t_next_idx
+
             else:
                 total_cfs = cf_cache[t_next_idx]
 
@@ -230,66 +245,99 @@ class SimulationController:
 
             A = self.regression_function.get_regression_matrix(explanatory)
 
-            for s in range(num_states):
-                Y = normalized_cfs[:, s]
-                coeffs = (torch.linalg.pinv(A) @ Y.unsqueeze(-1)).squeeze(-1)
-                
-                if t_reg in product_regression_timeline:
-                    product_reg_idx = torch.searchsorted(product_regression_timeline, t_reg)
-                    product.regression_coeffs[product_reg_idx][s] = coeffs
+            # Solve all states in one batched least-squares
+            solution = torch.linalg.lstsq(A, normalized_cfs).solution                        
+            coeffs_mat = solution.transpose(0, 1).contiguous()                               
 
-                if t_reg in self.exposure_timeline:
-                    exp_reg_idx = torch.searchsorted(self.exposure_timeline, t_reg)
-                    self.regression_coeffs[product.product_id][exp_reg_idx][s] = coeffs
+            # Store coeffs for this time in the product tensor and exposure tensor
+            if t_reg in product_regression_timeline:
+                product_reg_idx = torch.searchsorted(product_regression_timeline, t_reg).item()
+                product.regression_coeffs[product_reg_idx, :, :] = coeffs_mat                
 
-    def _evaluate_product(self, product : Product, resolved_requests : List[dict]):
-        prod_state=product.get_initial_state(self.num_paths_mainsim)
-        num_paths=self.num_paths_mainsim
-        exposures=[]
-        t_start=0
+            if t_reg in self.exposure_timeline:
+                exp_reg_idx = torch.searchsorted(self.exposure_timeline, t_reg).item()
+                self.regression_coeffs[product.product_id][exp_reg_idx, :, :] = coeffs_mat
+
+    def _evaluate_product(self, product: Product, resolved_requests: List[dict]):
+        num_paths = self.num_paths_mainsim
+        num_states = product.get_num_states()
+        state_transition_matrix = torch.arange(
+            num_states, device=device, dtype=torch.long
+        ).expand(num_paths, num_states).clone() 
+        initial_state = product.get_initial_state()
+        num_states = product.get_num_states()
+
+        exposures = []
+        t_start = 0
         cfs = torch.zeros(num_paths, dtype=FLOAT, device=device)
 
-        any_pv=any(m.metric_type==MetricType.PV for m in self.metrics)
+        any_pv = any(m.metric_type == MetricType.PV for m in self.metrics)
 
-        if len(self.exposure_timeline)==0 and any_pv:
+        # Case 1: no exposure timeline, only PV
+        if len(self.exposure_timeline) == 0 and any_pv:
             while t_start < len(product.product_timeline):
-                    prod_state, new_cfs=product.compute_normalized_cashflows(t_start, self.model, resolved_requests, self.regression_function, prod_state)
-                    cfs+=new_cfs
-                    t_start+=1
+                state_transition_matrix, new_cfs = product.compute_normalized_cashflows(
+                    t_start,
+                    self.model,
+                    resolved_requests,
+                    self.regression_function,
+                    state_transition_matrix
+                )
+                cfs += new_cfs[:, initial_state]
+                t_start += 1
 
         else:
+            # Case 2: exposures and maybe PV
             for i, t in enumerate(self.exposure_timeline):
-                while t_start < len(product.product_timeline) and product.product_timeline[t_start] <= t:
-                    prod_state, new_cfs=product.compute_normalized_cashflows(t_start, self.model, resolved_requests, self.regression_function,prod_state)
-                    cfs+=new_cfs
-                    t_start+=1
 
-                explanatory=resolved_requests[0][self.spot_requests[i].handle]
-                # Compute continuation value: A @ coeffs_per_path
+                # advance product's realized state forward until exposure time point is reached
+                while t_start < len(product.product_timeline) and product.product_timeline[t_start] <= t:
+                    state_transition_matrix, new_cfs = product.compute_normalized_cashflows(
+                        t_start,
+                        self.model,
+                        resolved_requests,
+                        self.regression_function,
+                        state_transition_matrix
+                    )
+                    cfs += new_cfs[:, initial_state]
+                    t_start += 1
+
+                prod_state = state_transition_matrix[:, num_states - 1]
+                explanatory = resolved_requests[0][self.spot_requests[i].handle]
                 A = self.regression_function.get_regression_matrix(explanatory)
 
-                coeffs_matrix = torch.stack([
-                    self.regression_coeffs[product.product_id][i][s] for s in prod_state
-                ], dim=0)  # shape: [num_paths, 3]
+                # Grab the regression coeffs for THIS product at exposure time i.
+                coeffs_all_states = self.regression_coeffs[product.product_id][i]
 
-                numeraire= resolved_requests[0][self.numeraire_requests[i].handle]
-                exposure = (A * coeffs_matrix).sum(dim=1)/numeraire
+                # Gather per-path coeffs using the realized per-path state.
+                coeffs_matrix = coeffs_all_states[prod_state]                         
+
+                continuation = (A * coeffs_matrix).sum(dim=1)                         
+
+                numeraire = resolved_requests[0][self.numeraire_requests[i].handle]   
+                exposure = continuation / numeraire                                   
+
                 exposures.append(exposure)
 
                 if any_pv:
                     while t_start < len(product.product_timeline):
-                        prod_state, new_cfs=product.compute_normalized_cashflows(t_start, self.model, resolved_requests, self.regression_function, prod_state)
-                        cfs+=new_cfs
-                        t_start+=1
+                        state_transition_matrix, new_cfs = product.compute_normalized_cashflows(
+                            t_start,
+                            self.model,
+                            resolved_requests,
+                            self.regression_function,
+                            state_transition_matrix
+                        )
+                        cfs += new_cfs[:, initial_state]
+                        t_start += 1
 
-
-        results=[]
-
+        results = []
         for metric in self.metrics:
-            eval=metric.evaluate(exposures, cfs)
-            results.append(eval)
+            eval_val = metric.evaluate(exposures, cfs)
+            results.append(eval_val)
 
         return results
+
 
     # Compute metric outputs in main simulation phase
     def evaluate_products(self, resolved_requests : List[dict]):

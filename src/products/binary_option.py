@@ -57,8 +57,6 @@ class BinaryOption(Product):
         else:
             return self.payment_amount * torch.exp(-rate * self.maturity) * norm.cdf(-d2)
     
-    def get_initial_state(self, num_paths):
-        return torch.full((num_paths,), 0, dtype=torch.long, device=device)
     
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None,state=None):
         spots=resolved_requests[0][self.spot_requests[time_idx].handle]
@@ -67,4 +65,4 @@ class BinaryOption(Product):
         numeraire=resolved_requests[0][self.numeraire_requests[time_idx].handle]
         normalized_cfs=cfs/numeraire
 
-        return state, normalized_cfs
+        return state, normalized_cfs.unsqueeze(1)

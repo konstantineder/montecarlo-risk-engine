@@ -105,7 +105,7 @@ if __name__ == "__main__":
     # Simulate option prices and store in data frame.
     # Since only spot price and time to maturity are varied
     # the rate and volatility will be filtered out
-    num_paths = 10000
+    num_paths = 100000
     steps = 1
     df_results_spot_maturity=compute_prices_for_grid(param_grid,weights,correlation_matrix,num_paths,steps).drop(columns=["rate", "vola"])
     
