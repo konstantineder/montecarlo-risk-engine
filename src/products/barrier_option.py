@@ -234,9 +234,6 @@ class BarrierOption(Product):
                 return NotImplementedError(f"Analytical method for {self.barrier_option_type1} not yet implemented")
 
     
-    def get_initial_state(self, num_paths):
-        return torch.full((num_paths,), 0, dtype=torch.long, device=device)
-    
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None, state=None):
         spots=torch.stack([resolved_requests[0][self.spot_requests[idx].handle] for idx in range(len(self.modeling_timeline))], dim=1)
         cfs = self.payoff(spots,model)
@@ -244,4 +241,4 @@ class BarrierOption(Product):
         numeraire=resolved_requests[0][self.numeraire_requests[len(self.product_timeline)-1].handle]
         normalized_cfs=cfs/numeraire
 
-        return state, normalized_cfs
+        return state, normalized_cfs.unsqueeze(1)

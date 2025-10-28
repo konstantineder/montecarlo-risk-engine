@@ -20,10 +20,6 @@ class BermudanOption(Product):
         self.product_timeline = torch.tensor(exercise_dates, dtype=FLOAT, device=device)
         self.modeling_timeline = self.product_timeline
         self.regression_timeline = self.product_timeline
-        self.regression_coeffs = [
-            [torch.zeros(3, device=device) for _ in range(2)]  # 2 states
-            for _ in range(len(self.regression_timeline))      # len(time points)
-        ]
         self.num_exercise_rights = 1
 
         self.numeraire_requests={idx: AtomicRequest(AtomicRequestType.NUMERAIRE,t) for idx, t in enumerate(self.modeling_timeline)}
@@ -57,40 +53,75 @@ class BermudanOption(Product):
     def get_num_states(self):
         return 2
     
-    def get_initial_state(self, num_paths):
-        return torch.full((num_paths,), 1, dtype=torch.long, device=device)
+    def get_initial_state(self):
+        return 1
 
-    def payoff(self, spots, model_params):
+    def payoff(self, spots, model):
         zero = torch.tensor([0.0], device=device)
         if self.option_type == OptionType.CALL:
             return torch.maximum(spots - self.strike, zero)
         else:
             return torch.maximum(self.strike - spots, zero)
     
-    def compute_normalized_cashflows(self, time_idx, model_params, resolved_requests, regression_function, state=[]):
+    def compute_normalized_cashflows(
+        self,
+        time_idx: int,
+        model,
+        resolved_requests,
+        regression_function,
+        state_transition_matrix: torch.Tensor,
+    ):
+        """
+        Vectorized version of compute_normalized_cashflows.
+        For each path p and hypothetical starting state s0 (column),
+        - decide exercise at this time_idx,
+        - generate normalized cashflow for this step,
+        - update remaining rights state.
+        
+        Returns:
+            next_state_matrix: [num_paths, num_states] (long)
+            cashflows_all:     [num_paths, num_states] (FLOAT)
+        """
+
+        _, num_states = state_transition_matrix.shape
+
+        # spot per path
         spot = resolved_requests[1][self.underlying_requests[time_idx].get_handle()]
-        immediate = self.payoff(spot, model_params)
+        immediate_path = self.payoff(spot, model)                                
 
-        # Check if time is the last in the product timeline
+        # Broadcast immediate payoff to all hypothetical starting states
+        immediate_all = immediate_path.unsqueeze(1).expand(-1, num_states)              
+
+        # Continuation value
         if time_idx == len(self.product_timeline) - 1:
-            continuation = torch.zeros_like(immediate)
+            continuation_all = torch.zeros_like(immediate_all)                          
         else:
-            A = regression_function.get_regression_matrix(spot)
-            coeffs_matrix = torch.stack([self.regression_coeffs[time_idx][s] for s in state.tolist()], dim=0)  # [num_paths, 3]
+            # Regression matrix for all paths at this time point
+            A = regression_function.get_regression_matrix(spot)                         
 
-            continuation = (A * coeffs_matrix).sum(dim=1)
+            coeffs_all_states = self.regression_coeffs[time_idx] 
+            coeffs_per_branch = coeffs_all_states[state_transition_matrix]                       
 
-        # Per-path exercise decision
-        should_exercise = (immediate > continuation.squeeze()) & (state > 0)
+            # Compute continuation value for all branches
+            continuation_all = (
+                A.unsqueeze(1)                          
+                * coeffs_per_branch        
+            ).sum(dim=2)                                
 
-        # Accumulate cashflows
-        numeraire=resolved_requests[0][self.numeraire_requests[time_idx].handle]
-        cashflows = immediate * should_exercise.float()/numeraire
+        exercise_left = state_transition_matrix > 0                                                     
+        should_exercise = (immediate_all > continuation_all) & exercise_left                
 
-        # Update remaining rights
-        state -= should_exercise.int()
+        numeraire = resolved_requests[0][self.numeraire_requests[time_idx].handle]       
+        numeraire_all = numeraire.unsqueeze(1).expand(-1, num_states)                      
 
-        return state, cashflows
+        cashflows_all = (
+            immediate_all * should_exercise.float() / numeraire_all
+        )                                                                                  
+
+        # Update remaining "rights"/state after possible exercise
+        next_state_transition_matrix = state_transition_matrix - should_exercise.long()                         
+
+        return next_state_transition_matrix, cashflows_all
     
 class AmericanOption(BermudanOption):
     def __init__(self, underlying, maturity, num_exercise_dates, strike, option_type):

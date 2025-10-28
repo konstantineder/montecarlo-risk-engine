@@ -4,6 +4,8 @@ from collections import defaultdict
 from numpy.typing import NDArray
 from typing import Union, List, Optional, Dict, Any, Sequence
 from request_interface.request_interface import CompositeRequest
+from maths.regression import RegressionFunction
+from models.model import Model
 
 # Enum for option types
 class OptionType(Enum):
@@ -43,14 +45,32 @@ class Product:
     def get_num_states(self):
         return 1
     
-    def get_initial_state(self, num_paths):
-        return torch.full((num_paths,), 0, dtype=torch.long, device=device)
+    def _allocate_regression_coeffs(self, regression_function: RegressionFunction):
+        num_time_points = len(self.regression_timeline)  # or prod.product_timeline if that's what you regress on
+        num_states = self.get_num_states()
+        degree = regression_function.get_degree()
+
+        self.regression_coeffs = torch.zeros(
+            (num_time_points, num_states, degree),
+            dtype=FLOAT,
+            device=device,
+        )
+
+    def get_initial_state(self):
+        return 0
 
     # Abstract method to compute the payoff for the specific product 
     def compute_payoff(self, paths, model):
         raise NotImplementedError
     
-    def compute_normalized_cashflows(self, time_idx, model, resolved_requests,regression_RegressionFunction=None, state=None):
+    def compute_normalized_cashflows(
+        self,
+        time_idx: int,
+        model,
+        resolved_requests,
+        regression_function,
+        state_matrix: torch.Tensor,
+    ):
         raise NotImplementedError
     
     # Abstract method to compute the pv using an analytic formula  

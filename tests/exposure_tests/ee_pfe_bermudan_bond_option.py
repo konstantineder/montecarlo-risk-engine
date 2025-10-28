@@ -28,14 +28,14 @@ if __name__ == "__main__":
     portfolio=[product]
 
     # Metric timeline for EE
-    exposure_timeline = np.linspace(0, 4.,100)
+    exposure_timeline = np.linspace(0, 4.,1000)
     ee_metric = EPEMetric()
     pfe_metric = PFEMetric(0.9)
 
     metrics=[ee_metric, pfe_metric]
 
-    num_paths_mainsim=10000
-    num_paths_presim=10000
+    num_paths_mainsim=100000
+    num_paths_presim=100000
     num_steps=1
     sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False, exposure_timeline)
 

@@ -179,7 +179,7 @@ class Bond(Product):
             cashflow+=self.notional
 
         discounted_cashflow = cashflow / numeraire
-        return state, discounted_cashflow
+        return state, discounted_cashflow.unsqueeze(1)
     
     def compute_normalized_cashflows_float(self, time_idx, model, resolved_requests,regression_RegressionFunction=None, state=None):
         libor_rate = resolved_requests[0][self.libor_requests[time_idx].handle]
@@ -197,4 +197,4 @@ class Bond(Product):
             cashflow+=self.notional
 
         discounted_cashflow = cashflow / numeraire
-        return state, discounted_cashflow
+        return state, discounted_cashflow.unsqueeze(1)

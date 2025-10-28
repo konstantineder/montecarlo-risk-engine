@@ -119,7 +119,7 @@ class InterestRateSwap(Product):
             state: Optional[torch.Tensor] = None
         ) -> tuple[Optional[torch.Tensor], torch.Tensor]:
         
-        total_value = torch.zeros_like(resolved_requests[0][0], dtype=FLOAT, device=device)
+        total_value = torch.zeros_like(resolved_requests[0][0], dtype=FLOAT, device=device).unsqueeze(1)
 
         time = self.modeling_timeline[time_idx]
 

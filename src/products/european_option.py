@@ -70,7 +70,7 @@ class EuropeanOption(Product):
         numeraire=resolved_requests[0][self.numeraire_requests[time_idx].handle]
         normalized_cfs=cfs/numeraire
 
-        return state, normalized_cfs
+        return state, normalized_cfs.unsqueeze(1)
 
     def compute_pv_analytically(self, model: BlackScholesModel):
         spot = model.get_spot()

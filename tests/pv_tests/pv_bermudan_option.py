@@ -78,8 +78,8 @@ if __name__ == "__main__":
     # defining the parameter grid
     param_grid = list(cartesian_product(T_vals,S0_vals, sigma_vals, r_vals, strikes))
 
-    num_paths_main_sim = 10000
-    num_paths_pre_sim = 10000
+    num_paths_main_sim = 100000
+    num_paths_pre_sim = 100000
     steps = 1
     
     # Simulate option prices and store in data frame.
