@@ -61,7 +61,7 @@ class EuropeanOption(Product):
                                      time_idx: int, 
                                      model: Model, 
                                      resolved_requests: List[dict], 
-                                     regression_RegressionFunction: Optional[object] = None, 
+                                     regression_function: RegressionFunction = None, 
                                      state: Optional[object] = None):
         
         spots=resolved_requests[1][self.underlying_request[time_idx].get_handle()]

@@ -80,21 +80,17 @@ class BermudanOption(Product):
         
         Returns:
             next_state_matrix: [num_paths, num_states] (long)
-            cashflows_all:     [num_paths, num_states] (FLOAT)
+            cashflows:         [num_paths, num_states] (FLOAT)
         """
 
-        _, num_states = state_transition_matrix.shape
+        _, S = state_transition_matrix.shape
 
-        # spot per path
         spot = resolved_requests[1][self.underlying_requests[time_idx].get_handle()]
-        immediate_path = self.payoff(spot, model)                                
-
-        # Broadcast immediate payoff to all hypothetical starting states
-        immediate_all = immediate_path.unsqueeze(1).expand(-1, num_states)              
+        immediate = self.payoff(spot, model).unsqueeze(1).expand(-1, S)              
 
         # Continuation value
         if time_idx == len(self.product_timeline) - 1:
-            continuation_all = torch.zeros_like(immediate_all)                          
+            continuation = torch.zeros_like(immediate)                          
         else:
             # Regression matrix for all paths at this time point
             A = regression_function.get_regression_matrix(spot)                         
@@ -103,25 +99,24 @@ class BermudanOption(Product):
             coeffs_per_branch = coeffs_all_states[state_transition_matrix]                       
 
             # Compute continuation value for all branches
-            continuation_all = (
+            continuation = (
                 A.unsqueeze(1)                          
                 * coeffs_per_branch        
             ).sum(dim=2)                                
 
         exercise_left = state_transition_matrix > 0                                                     
-        should_exercise = (immediate_all > continuation_all) & exercise_left                
+        should_exercise = (immediate > continuation) & exercise_left                
 
-        numeraire = resolved_requests[0][self.numeraire_requests[time_idx].handle]       
-        numeraire_all = numeraire.unsqueeze(1).expand(-1, num_states)                      
+        numeraire = resolved_requests[0][self.numeraire_requests[time_idx].handle].unsqueeze(1).expand(-1, S)                      
 
-        cashflows_all = (
-            immediate_all * should_exercise.float() / numeraire_all
+        cashflows = (
+            immediate * should_exercise.float() / numeraire
         )                                                                                  
 
         # Update remaining "rights"/state after possible exercise
         next_state_transition_matrix = state_transition_matrix - should_exercise.long()                         
 
-        return next_state_transition_matrix, cashflows_all
+        return next_state_transition_matrix, cashflows
     
 class AmericanOption(BermudanOption):
     def __init__(self, underlying, maturity, num_exercise_dates, strike, option_type):
