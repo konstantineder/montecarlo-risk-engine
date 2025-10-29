@@ -26,6 +26,7 @@ A flexible, extensible Monte Carlo simulation engine for pricing and risk analyt
   - Bermudan Bond Options
   - Bermudan Swaptions
   - American Options
+  - FlexiCalls
   - Barrier Options
   - Basket Options
   - Interest Rate Swaps
@@ -43,7 +44,8 @@ A flexible, extensible Monte Carlo simulation engine for pricing and risk analyt
 - [ ] Extend the **request interface** to support composite requests
 - [ ] Add **Libor Market Model (LMM)**
 - [ ] Add **Merton** jump-diffusion model
-- [ ] Extend the regression functionalities to include other types of regression schemes (SVD; neural nets as regression functions and training via SGD, etc.)
+- [ ] Add credit derivatives (e.g. basket CDSs)
+- [ ] Include netting sets and collateralization
 
 ## Architecture
 
