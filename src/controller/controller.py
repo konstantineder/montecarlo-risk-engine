@@ -260,12 +260,8 @@ class SimulationController:
 
     def _evaluate_product(self, product: Product, resolved_requests: List[dict]):
         num_paths = self.num_paths_mainsim
-        num_states = product.get_num_states()
-        state_transition_matrix = torch.arange(
-            num_states, device=device, dtype=torch.long
-        ).expand(num_paths, num_states).clone() 
         initial_state = product.get_initial_state()
-        num_states = product.get_num_states()
+        state_transition_matrix = torch.full((num_paths,), initial_state, dtype=torch.long, device=device).unsqueeze(1)
 
         exposures = []
         t_start = 0
@@ -283,7 +279,7 @@ class SimulationController:
                     self.regression_function,
                     state_transition_matrix
                 )
-                cfs += new_cfs[:, initial_state]
+                cfs += new_cfs[:, 0]
                 t_start += 1
 
         else:
@@ -299,10 +295,10 @@ class SimulationController:
                         self.regression_function,
                         state_transition_matrix
                     )
-                    cfs += new_cfs[:, initial_state]
+                    cfs += new_cfs[:, 0]
                     t_start += 1
 
-                prod_state = state_transition_matrix[:, num_states - 1]
+                prod_state = state_transition_matrix[:, 0]
                 explanatory = resolved_requests[0][self.spot_requests[i].handle]
                 A = self.regression_function.get_regression_matrix(explanatory)
 
@@ -328,7 +324,7 @@ class SimulationController:
                             self.regression_function,
                             state_transition_matrix
                         )
-                        cfs += new_cfs[:, initial_state]
+                        cfs += new_cfs[:, 0]
                         t_start += 1
 
         results = []

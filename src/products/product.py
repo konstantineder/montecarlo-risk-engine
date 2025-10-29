@@ -46,7 +46,7 @@ class Product:
         return 1
     
     def _allocate_regression_coeffs(self, regression_function: RegressionFunction):
-        num_time_points = len(self.regression_timeline)  # or prod.product_timeline if that's what you regress on
+        num_time_points = len(self.regression_timeline) 
         num_states = self.get_num_states()
         degree = regression_function.get_degree()
 
