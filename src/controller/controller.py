@@ -335,73 +335,74 @@ class SimulationController:
         return results
 
 
-    # Compute metric outputs in main simulation phase
-    def evaluate_products(self, resolved_requests : List[dict]):
-        results=[]
+    def evaluate_products(self, resolved_requests: List[dict]):
+        results = []
         for product in self.portfolio:
-            result=self._evaluate_product(product,resolved_requests)
-            results.append(result)
+            results.append(self._evaluate_product(product, resolved_requests))
 
-        # # Improve performance by parallelizing product evalutation in product dimension
-        # import concurrent.futures
+        # params must be the exact leaf tensors used in pricing, e.g. (S0, sigma, r)
+        params = tuple(self.model.get_model_params())
 
-        # results_by_id = {}
+        grads_all = []
+        hessdiag_all = []
 
-        # with concurrent.futures.ProcessPoolExecutor() as executor:
-        #     futures = {
-        #         executor.submit(self.evaluate_product, product, resolved_requests): product.product_id
-        #         for product in self.portfolio
-        #     }
+        for prod in results:
+            grads_per_metric = []
+            hess_per_metric  = []
 
-        #     for future in concurrent.futures.as_completed(futures):
-        #         product_id = futures[future]
-        #         results_by_id[product_id] = future.result()
+            for metric in prod:
+                grads_per_eval = []
+                hess_per_eval  = []
 
-        # If differentiation is enabled, compute and store first order derivatives 
-        # via algorithmic adjoint differentiation (AAD) using PyTorch 'autograd' method
-        # for each metric output for each product
-        grads = []
-        higher_grads = []
-        if self.differentiate:
-            model_params = self.model.get_model_params()
-            for prod in results:
-                grads_per_metric = []
-                for metric in prod:
-                    grads_per_eval = []
-                    for eval in metric:
-                        _grads = torch.autograd.grad(
-                            eval,
-                            model_params,
-                            retain_graph=True,
-                            create_graph=self.requires_higher_order_derivatives,
-                            allow_unused=True
-                        )
-                        grads_per_eval.append(_grads)
-                    grads_per_metric.append(grads_per_eval)
-                grads.append(grads_per_metric)
+                for eval in metric:
+                    # 1) scalar objective
+                    loss = eval if eval.ndim == 0 else eval.sum()
 
-            # If higher order derivatives are enabled, the second order derivatives
-            # are computed and stored
-            if self.requires_higher_order_derivatives:
-                for prod_grads in grads:
-                    higher_grads_per_metric = []
-                    for metric_grads in prod_grads:
-                        evaluation_grads = []
-                        for eval_grads in metric_grads:
-                            higher_grads_per_eval = []
-                            for grad in eval_grads:
-                                _higher_grads = torch.autograd.grad(
-                                    grad,
-                                    model_params,
+                    # 2) first order (allow_unused=True so we don't crash)
+                    g = torch.autograd.grad(
+                        loss, params,
+                        create_graph=self.requires_higher_order_derivatives,
+                        retain_graph=True,
+                        allow_unused=True,
+                    )
+
+                    # Replace None with zeros of the same shape as the param
+                    g = tuple(
+                        torch.zeros_like(p) if gi is None else gi
+                        for gi, p in zip(g, params)
+                    )
+                    grads_per_eval.append(g)
+
+                    # 3) second order diagonal (also allow_unused and guard None)
+                    if self.requires_higher_order_derivatives:
+                        hdiag = []
+                        for gi, pi in zip(g, params):
+                            if gi is None:
+                                hi = torch.zeros_like(pi)
+                            else:
+                                hi = torch.autograd.grad(
+                                    gi, pi,
+                                    grad_outputs=torch.ones_like(gi),
                                     retain_graph=True,
-                                    allow_unused=True
-                                )
-                                higher_grads_per_eval.append(_higher_grads)
-                            evaluation_grads.append(higher_grads_per_eval)
-                        higher_grads_per_metric.append(evaluation_grads)
-                    higher_grads.append(higher_grads_per_metric)
+                                    allow_unused=True,
+                                )[0]
+                                if hi is None:
+                                    hi = torch.zeros_like(pi)
+                            hdiag.append(hi)
+                        hess_per_eval.append(tuple(hdiag))
 
-        return SimulationResults(results, grads, higher_grads)
+                grads_per_metric.append(tuple(grads_per_eval))
+                if self.requires_higher_order_derivatives:
+                    hess_per_metric.append(tuple(hess_per_eval))
+
+            grads_all.append(tuple(grads_per_metric))
+            if self.requires_higher_order_derivatives:
+                hessdiag_all.append(tuple(hess_per_metric))
+
+        return SimulationResults(results, grads_all, hessdiag_all)
+
+
+
 
     # Perform entire simulation to simulate metric outputs
     def run_simulation(self):

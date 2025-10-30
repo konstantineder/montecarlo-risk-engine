@@ -13,31 +13,38 @@ class BlackScholesModel(Model):
         super().__init__(calibration_date)
         # Collect all model parameters in common PyTorch tensor
         # If AAD is enabled the respective adjoints are accumulated
-        self.model_params = [
-            torch.tensor(param, dtype=FLOAT, device=device)
-            for param in list([spot]) + list([sigma]) + list([rate])
-        ]
+        # Create leaf params ONCE with gradients enabled
+        self.S0    = torch.tensor([spot],  dtype=FLOAT, device=device, requires_grad=True)
+        self.sigma = torch.tensor([sigma], dtype=FLOAT, device=device, requires_grad=True)
+        self.r     = torch.tensor([rate],  dtype=FLOAT, device=device, requires_grad=True)
 
-    # Retrieve specific model parameters
+        # Keep an ordered tuple for autograd.grad
+        self._model_params = (self.S0, self.sigma, self.r)
+
+    # Use these SAME tensors everywhere; do not re-wrap/stack
+    def get_model_params(self):
+        return self._model_params
+
     def get_spot(self):
-        return torch.stack([self.model_params[0]])
+        return self.S0          # no torch.tensor/stack/detach/item
 
     def get_volatility(self):
-        return torch.stack([self.model_params[1]])
+        return self.sigma
 
     def get_rate(self):
-        return torch.stack([self.model_params[2]])
+        return self.r
 
     # Simulate Monte Carlo paths using analytic formulae
     def generate_paths_analytically(self, timeline, num_paths, num_steps):
+        # use repeat instead of expand+clone (fewer edge cases for grads)
+        spot = self.get_spot() * torch.ones(num_paths, dtype=FLOAT, device=device)
 
-        spot = self.get_spot().expand(num_paths).clone()
-        sigma=self.get_volatility()
-        rate=self.get_rate()
+
+        sigma = self.get_volatility()
+        rate  = self.get_rate()
         paths = []
 
-        t_start=self.calibration_date
-
+        t_start = self.calibration_date
         for i in range(len(timeline)):
             t_end = timeline[i]
             dt_total = t_end - t_start
@@ -45,14 +52,13 @@ class BlackScholesModel(Model):
 
             for _ in range(num_steps):
                 z = torch.randn(num_paths, dtype=FLOAT, device=device)
-                drift=rate*dt
-                diffusion=sigma*torch.sqrt(dt)*z-0.5*dt*sigma**2
-                spot = spot*torch.exp(drift+diffusion)
+                spot = spot * torch.exp((rate - 0.5 * sigma**2) * dt + sigma * torch.sqrt(dt) * z)
 
             paths.append(spot)
-            t_start=t_end
+            t_start = t_end
 
         return torch.stack(paths, dim=1)
+
     
     # Simulate Monte Carlo paths applying Euler-Mayurama scheme 
     def generate_paths_euler(self, timeline, num_paths, num_steps):
