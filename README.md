@@ -44,7 +44,7 @@ A flexible, extensible Monte Carlo simulation engine for pricing and risk analyt
 - [ ] Extend the **request interface** to support composite requests
 - [ ] Add **Libor Market Model (LMM)**
 - [ ] Add **Merton** jump-diffusion model
-- [ ] Add credit derivatives (e.g. basket CDSs)
+- [x] Add credit derivatives (e.g. basket CDSs)
 - [ ] Include netting sets and collateralization
 
 ## Architecture
