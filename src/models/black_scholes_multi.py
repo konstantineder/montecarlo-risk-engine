@@ -1,19 +1,22 @@
 from models.model import *
-from request_interface.request_interface import AtomicRequestType
-from typing import List, Any
+from request_interface.request_interface import AtomicRequest, AtomicRequestType
+from typing import List, Any, Dict, Set
 from numpy.typing import NDArray
 
-# Black-Scholes Model for multiple assets
 class BlackScholesMulti(Model):
-    def __init__(self, 
-                 calibration_date   : float,        # Calibration date of the model
-                 rate               : float,        # Risk-free interest rate
-                 spots              : List[float],  # Spot prices of the assets
-                 volatilities       : List[float],  # Volatilities of the assets
-                 correlation_matrix : NDArray[Any]  # Correlations amonng assets
-                 ):
+    """Black-Scholes Model for multiple assets."""
+    
+    def __init__(
+        self, 
+        calibration_date   : float,        # Calibration date of the model
+        rate               : float,        # Risk-free interest rate
+        asset_ids          : List[str],
+        spots              : List[float],  # Spot prices of the assets
+        volatilities       : List[float],  # Volatilities of the assets
+        correlation_matrix : NDArray[Any]  # Correlations amonng assets
+    ):
         
-        super().__init__(calibration_date)
+        super().__init__(calibration_date=calibration_date,asset_ids=asset_ids)
         # Collect all model parameters in common PyTorch tensor
         # If AAD is enabled the respective adjoints are accumulated
         self.model_params = [
@@ -36,18 +39,24 @@ class BlackScholesMulti(Model):
 
     def get_rate(self):
         return self.model_params[2*self.num_assets]
+    
+    def get_state(self, num_paths: int):
+        spot = self.get_spot()
+        return torch.log(spot).expand(num_paths, self.num_assets).clone()
 
-    # Compute covariance matrix for time delta
     def compute_cov_matrix(self, delta_t):
+        """Compute covariance matrix for time delta."""
         S = torch.diag(self.get_volatility())
         cov_matrix = S @ self.correlation_matrix @ S
         cov_matrix = cov_matrix*delta_t
         return cov_matrix
 
-    # Compute Cholesky decomposition of covariance matrix if Cholesky matrix
-    # has not yet been computed for current time delta
-    # otherwise retrieve stored matrix
     def compute_cholesky(self, delta_t):
+        """Compute Cholesky decomposition of covariance matrix.
+        
+        if Cholesky matrix has not yet been computed for current time delta
+        otherwise retrieve stored matrix
+        """
         dt = float(delta_t)
         if dt in self.cholesky:
             return self.cholesky[dt]
@@ -56,62 +65,36 @@ class BlackScholesMulti(Model):
             chol = torch.linalg.cholesky(cov_matrix)
             self.cholesky[dt] = chol
             return chol
-
-    # Simulate Monte Carlo paths using analytic formula
-    def generate_paths_analytically(self, timeline, num_paths, num_steps):
-        num_assets = self.num_assets
-        paths = []
-        spot = self.get_spot().expand(num_paths, num_assets).clone()
+        
+    def generate_correlated_randn(self, num_paths: int, delta_t: float) -> torch.Tensor:
+        cholesky = self.compute_cholesky(delta_t=delta_t)
+        z = torch.randn(num_paths, self.num_assets, dtype=FLOAT, device=device)
+        return z @ cholesky.T
+        
+    def simulate_time_step_analytically(self, delta_t: float, state: torch.Tensor, corr_randn: torch.Tensor) -> torch.Tensor:
+        """
+        state:  (N, markov_dim) or (markov_dim,)
+        randn:  same shape as state (noise already correlated)
+        """
         rate = self.get_rate()
+        
+        sigma = self.get_volatility().reshape(1, -1) 
+        drift = (rate - 0.5 * sigma * sigma) * delta_t
+        return state + drift + corr_randn
 
-        t_start = self.calibration_date
+    def simulate_time_step_euler(self, state: torch.Tensor, randn: torch.Tensor) -> torch.Tensor:
+        """
+        Euler–Maruyama step for BS multi asset model.
+        """
+        pass
 
-        for t_end in timeline:
-            dt_total = t_end - t_start
-            dt = dt_total / num_steps
-            cholesky = self.compute_cholesky(dt)
-
-            for _ in range(num_steps):
-                z = torch.randn(num_paths, num_assets, dtype=FLOAT, device=device)
-                correlated_z = z @ cholesky.T
-                L_squared = cholesky.pow(2)
-                drift = (rate - 0.5 * L_squared.sum(dim=1)) * dt
-                diffusion = correlated_z * torch.sqrt(dt)
-                spot = spot * torch.exp(drift + diffusion)
-
-            paths.append(spot.clone())
-            t_start = t_end
-
-        return torch.stack(paths, dim=1)  # [num_paths, len(timeline), num_assets]
-
-    # Simulate Monte Carlo paths using Euler-Mayurama scheme
-    def generate_paths_euler(self, timeline, num_paths, num_steps):
-        num_assets = self.num_assets
-        paths = []
-        spot = self.get_spot().expand(num_paths, num_assets).clone()
-        rate = self.get_rate()
-
-        t_start = self.calibration_date
-
-        for t_end in timeline:
-            dt_total = t_end - t_start
-            dt = dt_total / num_steps
-            cholesky = self.compute_cholesky(dt)
-
-            for _ in range(num_steps):
-                z = torch.randn(num_paths, num_assets, dtype=FLOAT, device=device)
-                correlated_z = z @ cholesky.T
-                dS = rate * spot * dt + spot * correlated_z * torch.sqrt(dt)
-                spot = spot + dS
-
-            paths.append(spot.clone())
-
-        return torch.stack(paths, dim=1)  # [num_paths, len(timeline)-1, num_assets]
-
-    # Resolve requests posed by each product and at each exposure timepoint
-    def resolve_request(self, req, state):
+    def resolve_request(self, req: AtomicRequest, asset_id: str, state: torch.Tensor) -> torch.Tensor:
+        """Resolve requests posed by each product and at each exposure timepoint."""
         if req.request_type == AtomicRequestType.SPOT:
-            return state
+            asset_idx = self.asset_ids.index(asset_id)
+            state_asset = state[:,asset_idx]
+            spot = torch.exp(state_asset)
+            return spot
 
         elif req.request_type == AtomicRequestType.DISCOUNT_FACTOR:
             t = req.time1
@@ -131,7 +114,8 @@ class BlackScholesMulti(Model):
         elif req.request_type == AtomicRequestType.NUMERAIRE:
             t = req.time1
             rate=self.get_rate()
-            return torch.exp(rate * (t - self.calibration_date))
+            numeraire = torch.exp(rate * (t - self.calibration_date))
+            return numeraire
 
         else:
             raise NotImplementedError(f"Request type {req.request_type} not supported.")

@@ -14,6 +14,7 @@ class InterestRateSwap(Product):
     def __init__(self, 
                  startdate   : float, # Startdate of the contract
                  enddate     : float, # Maturity of the contract
+                 asset_id    : str,
                  notional    : float, # Notional (currently for both fixed and floating leg)
                  fixed_rate  : float, # Fixed rate for fixed leg
                  tenor_fixed : float, # Tenor for fixed rate coupon payments
@@ -24,6 +25,7 @@ class InterestRateSwap(Product):
         super().__init__()
         self.startdate = startdate
         self.enddate = enddate
+        self.asset_id = asset_id
         self.notional = notional
         self.fixed_rate = fixed_rate
         self.tenor_fixed = tenor_fixed

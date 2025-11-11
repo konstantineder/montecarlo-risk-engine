@@ -46,17 +46,19 @@ class SimulationResults:
 # Simulation Controller to perform Monte Carlo simulation
 # and compute metric outputs for each product in a portfolio
 class SimulationController:
-    def __init__(self, 
-                 portfolio           : Sequence[Product],      # Portfolio containing all products to be evaluated
-                 model               : Model,                  # Model used to simulate paths
-                 metrics             : Sequence[Metric],       # Collection of metrics used to compute outputs
-                 num_paths_mainsim   : int,                    # Number of Monte Carlo paths used for main simulation
-                 num_paths_presim    : int,                    # Number of Monte Carlo paths used for pre simulation
-                 num_steps           : int,                    # Number of time steps used for path simulation
-                 simulation_scheme   : SimulationScheme,       # Set Simulation Scheme: Schemes currently provided: Analytical, Euler, Milstein
-                 differentiate       : bool = False,           # Turn differentiation on or off
-                 exposure_timeline   : Union[List[float], np.ndarray, None] = None,     # Set timeline for exposure simulation
-                 regression_function: Optional[PolyomialRegression] = None):  # Set regression function used for LSM algorithm
+    def __init__(
+        self, 
+        portfolio           : Sequence[Product],      # Portfolio containing all products to be evaluated
+        model               : Model,                  # Model used to simulate paths
+        metrics             : Sequence[Metric],       # Collection of metrics used to compute outputs
+        num_paths_mainsim   : int,                    # Number of Monte Carlo paths used for main simulation
+        num_paths_presim    : int,                    # Number of Monte Carlo paths used for pre simulation
+        num_steps           : int,                    # Number of time steps used for path simulation
+        simulation_scheme   : SimulationScheme,       # Set Simulation Scheme: Schemes currently provided: Analytical, Euler, Milstein
+        differentiate       : bool = False,           # Turn differentiation on or off
+        exposure_timeline   : Union[List[float], np.ndarray, None] = None,     # Set timeline for exposure simulation
+        regression_function: Optional[PolyomialRegression] = None
+    ):  # Set regression function used for LSM algorithm
         
         if exposure_timeline is None:
             exposure_timeline = []
@@ -107,8 +109,8 @@ class SimulationController:
             self.regression_coeffs.append(coeffs_tensor)
 
         # Set up requests for each exposure timepoint 
-        self.numeraire_requests = {idx: AtomicRequest(AtomicRequestType.NUMERAIRE, t) for idx, t in enumerate(exposure_timeline)}
-        self.spot_requests = {idx: AtomicRequest(AtomicRequestType.SPOT) for idx in range(len(exposure_timeline))}
+        self.numeraire_requests = {(idx, "numeraire"): AtomicRequest(AtomicRequestType.NUMERAIRE, t) for idx, t in enumerate(exposure_timeline)}
+        self.spot_requests = {(idx, ""): AtomicRequest(AtomicRequestType.SPOT) for idx in range(len(exposure_timeline))}
 
         # Collect timelines of each product and unify with exposure timeline
         # Remove duplicates and sort timeline
@@ -238,8 +240,8 @@ class SimulationController:
                 explanatory = resolved_requests[0][product.spot_requests[i_t].handle]
             else:
                 i_t = self.exposure_timeline.tolist().index(t_reg)
-                numeraire = resolved_requests[0][self.numeraire_requests[i_t].handle]
-                explanatory = resolved_requests[0][self.spot_requests[i_t].handle]
+                numeraire = resolved_requests[0][self.numeraire_requests[(i_t, "numeraire")].handle]
+                explanatory = resolved_requests[0][self.spot_requests[(i_t, "")].handle]
 
             normalized_cfs = numeraire.unsqueeze(1) * total_cfs
 
@@ -299,7 +301,7 @@ class SimulationController:
                     t_start += 1
 
                 prod_state = state_transition_matrix[:, 0]
-                explanatory = resolved_requests[0][self.spot_requests[i].handle]
+                explanatory = resolved_requests[0][self.spot_requests[(i, "")].handle]
                 A = self.regression_function.get_regression_matrix(explanatory)
 
                 # Grab the regression coeffs for THIS product at exposure time i.
@@ -310,7 +312,7 @@ class SimulationController:
 
                 continuation = (A * coeffs_matrix).sum(dim=1)                         
 
-                numeraire = resolved_requests[0][self.numeraire_requests[i].handle]   
+                numeraire = resolved_requests[0][self.numeraire_requests[(i, "numeraire")].handle]   
                 exposure = continuation / numeraire                                   
 
                 exposures.append(exposure)

@@ -18,11 +18,11 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # Setup model and product
-    model = VasicekModel(calibration_date=0.,rate=0.03,mean=0.05,mean_reversion_speed=0.02,volatility=0.2)
+    model = VasicekModel(calibration_date=0.,asset_id="", rate=0.03,mean=0.05,mean_reversion_speed=0.02,volatility=0.2)
     maturity = 2.0
 
-    frn = Bond(startdate=0.0,maturity=maturity,notional=1.0,tenor=0.25,pays_notional=True)
-    coupon_bond = Bond(startdate=0.0,maturity=2.0,notional=maturity,tenor=0.25,pays_notional=True, fixed_rate=0.03)
+    frn = Bond(startdate=0.0,asset_id="",maturity=maturity,notional=1.0,tenor=0.25,pays_notional=True)
+    coupon_bond = Bond(startdate=0.0,asset_id="",maturity=2.0,notional=maturity,tenor=0.25,pays_notional=True, fixed_rate=0.03)
 
     portfolio=[frn, coupon_bond]
 

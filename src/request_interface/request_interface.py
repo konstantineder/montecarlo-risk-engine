@@ -98,42 +98,54 @@ class RequestInterface:
         # From products
         for prod in products:
             requests = prod.get_atomic_requests()
-            for t, reqs in requests.items():
+            for (t, asset_id), reqs in requests.items():
                 time_index = time_to_index[float(prod.modeling_timeline[t])]
                 for req in reqs:
-                    all_requests[time_index].add(req)
-                    atomic_counter = self._register(req, atomic_request_key_to_handle, time_index, atomic_counter)
+                    all_requests[(time_index, asset_id)].add(req)
+                    atomic_counter = self._register(
+                        req, 
+                        atomic_request_key_to_handle, 
+                        time_index, 
+                        asset_id, 
+                        atomic_counter
+                    )
 
         # From external exposure requests
-        for t, exp_reqs in exposure_requests.items():
+        for (t, asset_id), exp_reqs in exposure_requests.items():
             time_index = time_to_index[float(exposure_timeline[t])]
             for exp_req in exp_reqs:
-                all_requests[time_index].add(exp_req)
-                atomic_counter = self._register(exp_req, atomic_request_key_to_handle, time_index, atomic_counter)
+                all_requests[(time_index, asset_id)].add(exp_req)
+                atomic_counter = self._register(
+                    exp_req, 
+                    atomic_request_key_to_handle, 
+                    time_index, 
+                    asset_id, 
+                    atomic_counter
+                )
 
         self.all_requests = all_requests
         self.all_composite_requests = all_comp_requests
 
-    def _register(self,req, request_key_to_handle, time_index, counter):
-        key = (time_index, req)
+    def _register(self,req, request_key_to_handle, time_index, asset_id, counter):
+        key = (time_index, asset_id, req)
         if key not in request_key_to_handle:
             request_key_to_handle[key] = counter
             counter += 1
         req.set_handle(request_key_to_handle[key])
         return counter
 
-    def resolve_requests(self, paths):
+    def resolve_requests(self, paths: torch.Tensor):
         """Resolve all requests once paths have been simulated."""
         resolved_requests = {}
         resolved_composite_requests = {}
 
-        for t, reqs in self.all_requests.items():
+        for (t, asset_id), reqs in self.all_requests.items():
             for req in reqs:
                 state = paths[:, t]
-                result = self.model.resolve_request(req, state)  # could be [num_paths] or [num_paths, num_assets]
+                result = self.model.resolve_request(req, asset_id, state)  # could be [num_paths] or [num_paths, num_assets]
                 resolved_requests[req.handle] = result
 
-        for t, comp_reqs in self.all_composite_requests.items():
+        for (t, asset_id), comp_reqs in self.all_composite_requests.items():
             for req in comp_reqs:
                 resolved_composite_requests[req.get_handle()] = req.get_value(resolved_requests)
 

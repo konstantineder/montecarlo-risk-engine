@@ -10,6 +10,7 @@ class Bond(Product):
     def __init__(self, 
                  startdate    : float, # Startdate of contract
                  maturity     : float, # Maturity of contract
+                 asset_id     : str,
                  notional     : float, # Principal/Notional
                  tenor        : float, # Tenor of coupon payments
                  pays_notional: Optional[bool]=True, # Pays notional at maturity (True by default)
@@ -19,6 +20,7 @@ class Bond(Product):
         super().__init__()
         self.startdate = torch.tensor([startdate], dtype=FLOAT,device=device)
         self.maturity = torch.tensor([maturity], dtype=FLOAT,device=device)
+        self.asset_id = asset_id
         self.notional = torch.tensor([notional], dtype=FLOAT, device=device)
         self.tenor = torch.tensor([tenor], dtype=FLOAT, device=device)
         self.fixed_rate = fixed_rate
@@ -36,28 +38,28 @@ class Bond(Product):
 
         if fixed_rate is not None:
             while date < maturity:
-                self.numeraire_requests[idx] = AtomicRequest(AtomicRequestType.NUMERAIRE, date)
-                self.underlying_requests[idx] = AtomicRequest(request_type=AtomicRequestType.FORWARD_RATE,time1=startdate,time2=date)
+                self.numeraire_requests[(idx, "numeraire")] = AtomicRequest(AtomicRequestType.NUMERAIRE, date)
+                self.underlying_requests[(idx, asset_id)] = AtomicRequest(request_type=AtomicRequestType.FORWARD_RATE,time1=startdate,time2=date)
                 self.payment_dates.append(date)
                 date += tenor
                 idx += 1
 
             # Final payment at maturity
-            self.numeraire_requests[idx] = AtomicRequest(AtomicRequestType.DISCOUNT_FACTOR, maturity)
+            self.numeraire_requests[(idx, "numeraire")] = AtomicRequest(AtomicRequestType.DISCOUNT_FACTOR, maturity)
             self.underlying_requests[idx] = AtomicRequest(request_type=AtomicRequestType.FORWARD_RATE,time1=startdate,time2=maturity)
             self.payment_dates.append(maturity)
         else:
             while date < maturity:
-                self.libor_requests[idx] = AtomicRequest(AtomicRequestType.LIBOR_RATE, date - tenor, date)
-                self.numeraire_requests[idx] = AtomicRequest(AtomicRequestType.NUMERAIRE, date)
+                self.libor_requests[(idx, asset_id)] = AtomicRequest(AtomicRequestType.LIBOR_RATE, date - tenor, date)
+                self.numeraire_requests[(idx, "numeraire")] = AtomicRequest(AtomicRequestType.NUMERAIRE, date)
                 self.underlying_requests[idx] = AtomicRequest(request_type=AtomicRequestType.FORWARD_RATE,time1=startdate,time2=date-tenor)
                 self.payment_dates.append(date)
                 date += tenor
                 idx += 1
 
             # Final payment at maturity
-            self.libor_requests[idx] = AtomicRequest(AtomicRequestType.LIBOR_RATE, date - tenor, maturity)
-            self.numeraire_requests[idx] = AtomicRequest(AtomicRequestType.DISCOUNT_FACTOR, maturity)
+            self.libor_requests[(idx, asset_id)] = AtomicRequest(AtomicRequestType.LIBOR_RATE, date - tenor, maturity)
+            self.numeraire_requests[(idx, "numeraire")] = AtomicRequest(AtomicRequestType.DISCOUNT_FACTOR, maturity)
             self.underlying_requests[idx] = AtomicRequest(request_type=AtomicRequestType.FORWARD_RATE,time1=startdate,time2=date-tenor)
             self.underlying_requests[idx + 1] = AtomicRequest(request_type=AtomicRequestType.FORWARD_RATE,time1=startdate,time2=maturity)
             self.payment_dates.append(maturity)
@@ -89,12 +91,12 @@ class Bond(Product):
     def get_atomic_requests(self):
         requests=defaultdict(list)
 
-        for t, req in self.numeraire_requests.items():
-            requests[t].append(req)
+        for label, req in self.numeraire_requests.items():
+            requests[label].append(req)
 
         if self.fixed_rate is None:
-            for t, req in self.libor_requests.items():
-                requests[t].append(req)
+            for label, req in self.libor_requests.items():
+                requests[label].append(req)
 
         return requests
     
@@ -165,7 +167,7 @@ class Bond(Product):
             return self.compute_normalized_cashflows_float(time_idx, model, resolved_requests,regression_RegressionFunction, state)
     
     def compute_normalized_cashflows_fixed(self, time_idx, model, resolved_requests,regression_RegressionFunction=None, state=None):
-        numeraire= resolved_requests[0][self.numeraire_requests[time_idx].handle]
+        numeraire= resolved_requests[0][self.numeraire_requests[(time_idx, "numeraire")].handle]
 
         prev_time=self.startdate
         if time_idx > 0:
@@ -182,8 +184,8 @@ class Bond(Product):
         return state, discounted_cashflow.unsqueeze(1)
     
     def compute_normalized_cashflows_float(self, time_idx, model, resolved_requests,regression_RegressionFunction=None, state=None):
-        libor_rate = resolved_requests[0][self.libor_requests[time_idx].handle]
-        numeraire= resolved_requests[0][self.numeraire_requests[time_idx].handle]
+        libor_rate = resolved_requests[0][self.libor_requests[(time_idx, self.asset_id)].handle]
+        numeraire= resolved_requests[0][self.numeraire_requests[(time_idx, "numeraire")].handle]
 
         prev_time=self.startdate
         if time_idx > 0:
