@@ -1,15 +1,9 @@
 from enum import Enum, auto
 from common.packages import *
+from common.enums import SimulationScheme
 from models.model import Model
 from typing import Union, List, Optional, Sequence, Dict, Set
 from request_interface.request_interface import AtomicRequest, AtomicRequestType
-
-class SimulationScheme(Enum):
-    """Enum for simulation schemes."""
-    EULER = 0
-    MILSTEIN = 1
-    ANALYTICAL = 2
-
 
 class MonteCarloEngine:
     """Monte Carlo engine to simulate paths for pre and main sim."""
@@ -41,28 +35,28 @@ class MonteCarloEngine:
         timeline: torch.Tensor, 
         num_paths: int, 
         num_steps: int,
-        ) -> torch.Tensor:
+    ) -> torch.Tensor:
         """Simulate Monte Carlo paths using analytic formulae."""
         
         state = self.model.get_state(num_paths)
         paths: list = []
 
-        t_prev = self.model.calibration_date
+        t_prev = self.model.calibration_date.clone()
 
         for t_now in timeline:
             dt_total = t_now - t_prev
             dt = dt_total / num_steps
-            corr_randn = self.model.generate_correlated_randn(num_paths, dt)
-
-            for _ in range(num_steps):
-                state = self.model.simulate_time_step_analytically(
-                    delta_t=dt,
-                    state=state,
-                    corr_randn=corr_randn
-                )
-            
+            if dt > 0:
+                for _ in range(num_steps):
+                    corr_randn = self.model.generate_correlated_randn(num_paths, SimulationScheme.ANALYTICAL, dt)
+                    state = self.model.simulate_time_step_analytically(
+                        time1=t_prev,
+                        time2=t_prev + dt,
+                        state=state,
+                        corr_randn=corr_randn
+                    )
+                    t_prev += dt
             paths.append(state)
-            t_prev = t_now
 
         return torch.stack(paths, dim=1)
 
@@ -71,28 +65,28 @@ class MonteCarloEngine:
         timeline: torch.Tensor, 
         num_paths: int, 
         num_steps: int,
-        ) -> torch.Tensor:
+    ) -> torch.Tensor:
         """Simulate Monte Carlo paths using Euler-Mayurama scheme."""
         
         state = self.model.get_state(num_paths)
         paths: list = []
 
-        t_prev = self.model.calibration_date
+        t_prev = self.model.calibration_date.clone()
 
         for t_now in timeline:
             dt_total = t_now - t_prev
             dt = dt_total / num_steps
-            corr_randn = self.model.generate_correlated_randn(num_paths, dt)
-
-            for _ in range(num_steps):
-                state = self.model.simulate_time_step_euler(
-                    delta_t=dt,
-                    state=state,
-                    corr_randn=corr_randn
-                )
-            
+            if dt > 0:
+                for _ in range(num_steps):
+                    corr_randn = self.model.generate_correlated_randn(num_paths, SimulationScheme.EULER, dt)
+                    state = self.model.simulate_time_step_euler(
+                        time1=t_prev,
+                        time2=t_prev + dt,
+                        state=state,
+                        corr_randn=corr_randn
+                    )
+                    t_prev += dt
             paths.append(state)
-            t_prev = t_now
 
         return torch.stack(paths, dim=1)
 

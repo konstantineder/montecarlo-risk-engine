@@ -3,18 +3,22 @@ from request_interface.request_interface import AtomicRequestType, AtomicRequest
 import numpy as np
 from collections import defaultdict
 
-# Bermudan option implementation
-# Payoff depends on specification of the underlying
-# Current product classes supported for underlying: Equity, Bond and Swap
 class BermudanOption(Product):
-    def __init__(self, 
-                 underlying     : Product, 
-                 exercise_dates : Union[Sequence[float], NDArray], 
-                 strike         : float, 
-                 option_type    : OptionType
-                 ):
+    """
+    Bermudan option implementation
+    Payoff depends on specification of the underlying
+    Current product classes supported for underlying: Equity, Bond and Swap
+    """
+    def __init__(
+        self, 
+        underlying     : Product, 
+        exercise_dates : Union[Sequence[float], NDArray], 
+        strike         : float, 
+        option_type    : OptionType,
+        asset_id       : str | None = None,
+    ):
         
-        super().__init__()
+        super().__init__(asset_ids=[asset_id])
         self.strike = torch.tensor([strike], dtype=FLOAT, device=device)
         self.option_type = option_type
         self.product_timeline = torch.tensor(exercise_dates, dtype=FLOAT, device=device)
@@ -22,33 +26,18 @@ class BermudanOption(Product):
         self.regression_timeline = self.product_timeline
         self.num_exercise_rights = 1
 
-        self.numeraire_requests={idx: AtomicRequest(AtomicRequestType.NUMERAIRE,t) for idx, t in enumerate(self.modeling_timeline)}
-        self.spot_requests={idx: AtomicRequest(AtomicRequestType.SPOT) for idx in range(len(self.modeling_timeline))}
+        self.numeraire_requests={
+            idx: AtomicRequest(AtomicRequestType.NUMERAIRE,t) for idx, t in enumerate(self.modeling_timeline)
+            }
+        asset_id = self.asset_ids[0]
+        self.spot_requests={
+            (idx, asset_id): AtomicRequest(AtomicRequestType.SPOT) for idx in range(len(self.modeling_timeline))
+            }
 
-        self.underlying_requests={}
         idx=0
         for exercise_date in exercise_dates:
-            self.underlying_requests[idx]=underlying.generate_composite_requests_for_date(exercise_date)
+            self.underlying_requests[idx]=underlying.generate_underlying_requests_for_date(exercise_date)
             idx+=1
-
-    def get_atomic_requests(self):
-        requests=defaultdict(list)
-        for t, req in self.numeraire_requests.items():
-            requests[t].append(req)
-
-        for t, req in self.spot_requests.items():
-            requests[t].append(req)
-
-        return requests
-    
-    
-    def get_composite_requests(self):
-        requests=defaultdict(list)
-        for t, req in self.underlying_requests.items():
-            requests[t].append(req)
-
-        return requests
-
 
     def get_num_states(self):
         return 2
@@ -86,7 +75,15 @@ class BermudanOption(Product):
         _, S = state_transition_matrix.shape
 
         spot = resolved_requests[1][self.underlying_requests[time_idx].get_handle()]
-        explanatory = resolved_requests[0][self.spot_requests[time_idx].handle]
+        
+        asset_id = self.get_asset_id()
+        explanatory = self.get_resolved_atomic_request(
+            resolved_atomic_requests=resolved_requests[0],
+            request_type=AtomicRequestType.SPOT,
+            time_idx=time_idx,
+            asset_id=asset_id,
+        )
+
         immediate = self.payoff(spot, model).unsqueeze(1).expand(-1, S)              
 
         # Continuation value
@@ -108,7 +105,11 @@ class BermudanOption(Product):
         exercise_left = state_transition_matrix > 0                                                     
         should_exercise = (immediate > continuation) & exercise_left                
 
-        numeraire = resolved_requests[0][self.numeraire_requests[time_idx].handle].unsqueeze(1).expand(-1, S)                      
+        numeraire = self.get_resolved_atomic_request(
+            resolved_atomic_requests=resolved_requests[0],
+            request_type=AtomicRequestType.NUMERAIRE,
+            time_idx=time_idx,
+           ).unsqueeze(1).expand(-1, S)                      
 
         cashflows = (
             immediate * should_exercise.float() / numeraire
@@ -120,8 +121,20 @@ class BermudanOption(Product):
         return next_state_transition_matrix, cashflows
     
 class AmericanOption(BermudanOption):
-    def __init__(self, underlying, maturity, num_exercise_dates, strike, option_type):
+    def __init__(
+        self, 
+        underlying, 
+        maturity, 
+        num_exercise_dates, 
+        strike, 
+        option_type, 
+        asset_id: str | None = None
+    ):
         exercise_dates=np.linspace(0.,maturity,num_exercise_dates) if num_exercise_dates>1 else [maturity]
-        super().__init__(underlying=underlying, exercise_dates=exercise_dates,
-                         strike=strike,
-                         option_type=option_type)
+        super().__init__(
+            underlying=underlying, 
+            exercise_dates=exercise_dates,
+            strike=strike,
+            option_type=option_type,
+            asset_id=asset_id
+            )

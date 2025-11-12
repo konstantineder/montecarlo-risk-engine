@@ -1,6 +1,7 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import matplotlib.pyplot as plt
 import os
@@ -9,8 +10,8 @@ from models.vasicek import VasicekModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
 from metrics.ene_metric import ENEMetric
+from metrics.pv_metric import PVMetric
 from products.bond import Bond
-from engine.engine import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -18,25 +19,26 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # Setup model and product
-    model = VasicekModel(calibration_date=0.,asset_id="", rate=0.03,mean=0.05,mean_reversion_speed=0.02,volatility=0.2)
+    model = VasicekModel(calibration_date=0.,rate=0.03,mean=0.05,mean_reversion_speed=0.02,volatility=0.2)
     maturity = 2.0
 
-    frn = Bond(startdate=0.0,asset_id="",maturity=maturity,notional=1.0,tenor=0.25,pays_notional=True)
-    coupon_bond = Bond(startdate=0.0,asset_id="",maturity=2.0,notional=maturity,tenor=0.25,pays_notional=True, fixed_rate=0.03)
-
+    frn = Bond(startdate=0.0,maturity=maturity,notional=1.0,tenor=2,pays_notional=True)
+    coupon_bond = Bond(startdate=0.0,maturity=2.0,notional=1,tenor=2,pays_notional=True, fixed_rate=0.0)
+    print(model.compute_bond_price(0,2,0.03))
     portfolio=[frn, coupon_bond]
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, 3.,100)
+    pv_metric = PVMetric()
     epe_metric = EPEMetric()
     pfe_metric = PFEMetric(0.9)
 
-    metrics=[epe_metric, pfe_metric]
+    metrics=[epe_metric, pfe_metric, pv_metric]
 
-    num_paths_mainsim=10000
-    num_paths_presim=100000
-    num_steps=1
-    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False, exposure_timeline)
+    num_paths_mainsim=100000
+    num_paths_presim=1000000
+    num_steps=50
+    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.ANALYTICAL, False, exposure_timeline)
 
     sim_results=sc.run_simulation()
 
@@ -45,6 +47,8 @@ if __name__ == "__main__":
     pfes_cbond=sim_results.get_results(0,1)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    
+    print(sim_results.get_results(1,2)[0])
 
     # Plot for IRS1
     ax1.plot(exposure_timeline, ees_cbond, label='EPE (FRN)', color='red')

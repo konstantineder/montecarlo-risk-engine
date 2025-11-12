@@ -1,6 +1,6 @@
 from products.product import *
 from products.bond import Bond
-from request_interface.request_interface import CompositeRequest
+from request_interface.request_types import UnderlyingRequest
 from collections import defaultdict
 from typing import Union, List, Optional
 from models.model import Model
@@ -9,23 +9,25 @@ class IRSType(Enum):
     PAYER = 0
     RECEIVER = 1
 
-# Plain Vanilla Interest Rate Swap
 class InterestRateSwap(Product):
-    def __init__(self, 
-                 startdate   : float, # Startdate of the contract
-                 enddate     : float, # Maturity of the contract
-                 asset_id    : str,
-                 notional    : float, # Notional (currently for both fixed and floating leg)
-                 fixed_rate  : float, # Fixed rate for fixed leg
-                 tenor_fixed : float, # Tenor for fixed rate coupon payments
-                 tenor_float : float, # Tenor for floating coupon payments
-                 irs_type    : IRSType # Specification of type of payment received (Receiver if fixed payment is received else Payer)
-                 ):
+    """
+    Plain Vanilla Interest Rate Swap
+    """
+    def __init__(
+        self, 
+        startdate   : float, # Startdate of the contract
+        enddate     : float, # Maturity of the contract
+        notional    : float, # Notional (currently for both fixed and floating leg)
+        fixed_rate  : float, # Fixed rate for fixed leg
+        tenor_fixed : float, # Tenor for fixed rate coupon payments
+        tenor_float : float, # Tenor for floating coupon payments
+        irs_type    : IRSType, # Specification of type of payment received (Receiver if fixed payment is received else Payer)
+        asset_id    : str | None = None,
+    ):
         
-        super().__init__()
+        super().__init__(asset_ids=[asset_id])
         self.startdate = startdate
         self.enddate = enddate
-        self.asset_id = asset_id
         self.notional = notional
         self.fixed_rate = fixed_rate
         self.tenor_fixed = tenor_fixed
@@ -95,9 +97,18 @@ class InterestRateSwap(Product):
 
         return atomic_requests
     
-    def generate_composite_requests_for_date(self, observation_date : float):
-        swap=InterestRateSwap(observation_date,self.enddate,self.notional,self.fixed_rate,self.tenor_fixed,self.tenor_float,self.irs_type)
-        return CompositeRequest(swap)
+    def generate_underlying_requests_for_date(self, observation_date : float):
+        swap=InterestRateSwap(
+            startdate=observation_date,
+            enddate=self.enddate,
+            notional=self.notional,
+            fixed_rate=self.fixed_rate,
+            tenor_fixed=self.tenor_fixed,
+            tenor_float=self.tenor_float,
+            irs_type=self.irs_type,
+            asset_id=self.get_asset_id()
+            )
+        return UnderlyingRequest(swap)
             
     def get_value(self, resolved_atomic_requests):
         """

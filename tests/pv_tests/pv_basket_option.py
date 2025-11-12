@@ -1,6 +1,7 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,7 +10,6 @@ from controller.controller import SimulationController
 from models.black_scholes_multi import BlackScholesMulti
 from metrics.pv_metric import PVMetric
 from products.basket_option import BasketOption, OptionType,BasketOptionType
-from engine.engine import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -34,16 +34,16 @@ if __name__ == "__main__":
         return 2 * abs(x - y) / denom
 
 
-    def compute_prices_for_grid(param_grid,weights,correlation_matrix, num_paths, steps):
+    def compute_prices_for_grid(param_grid,asset_ids,weights,correlation_matrix, num_paths, steps):
         results = []
 
         for T, S0, sigma, rate, strike in param_grid:
             spots=[S0,S0,S0,S0]
             sigmas=[sigma,sigma,sigma,sigma]
-            model = BlackScholesMulti(0.0,rate,spots,sigmas,correlation_matrix)
+            model = BlackScholesMulti(0.0,rate,asset_ids,spots,sigmas,correlation_matrix)
 
-            bo_artm = BasketOption(T,weights,strike,OptionType.CALL,BasketOptionType.ARITHMETIC,True)
-            bo_geo = BasketOption(T,weights,strike,OptionType.CALL,BasketOptionType.GEOMETRIC)
+            bo_artm = BasketOption(T,asset_ids,weights,strike,OptionType.CALL,BasketOptionType.ARITHMETIC,True)
+            bo_geo = BasketOption(T,asset_ids,weights,strike,OptionType.CALL,BasketOptionType.GEOMETRIC)
 
             portfolio = [bo_artm,bo_geo]
             metrics=[PVMetric()]
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     strikes = [100]
     T_vals = np.linspace(0.25, 1.0, 20)
 
-    num_assets=4
+    asset_ids = ["asset1", "asset2", "asset3", "asset4"]
 
     correlation_matrix = np.array([
         [1.0, 0.5, 0.5, 0.5],
@@ -89,10 +89,10 @@ if __name__ == "__main__":
     spots=[100.0,100.0,100.0,100.0]
     sigmas=[0.4,0.4,0.4,0.4]
     rate=0.0
-    model=BlackScholesMulti(0.0,rate,spots,sigmas,correlation_matrix)
+    model=BlackScholesMulti(0.0,rate,asset_ids,spots,sigmas,correlation_matrix)
     weights=[0.25,0.25,0.25,0.25]
-    basket=BasketOption(1.0,weights,100,OptionType.CALL,BasketOptionType.ARITHMETIC,True)
-    basket_geo=BasketOption(1.0,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
+    basket=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.ARITHMETIC,True)
+    basket_geo=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
 
     portfolio=[basket,basket_geo]
 
@@ -107,15 +107,15 @@ if __name__ == "__main__":
     # the rate and volatility will be filtered out
     num_paths = 100000
     steps = 1
-    df_results_spot_maturity=compute_prices_for_grid(param_grid,weights,correlation_matrix,num_paths,steps).drop(columns=["rate", "vola"])
+    df_results_spot_maturity=compute_prices_for_grid(param_grid,asset_ids,weights,correlation_matrix,num_paths,steps).drop(columns=["rate", "vola"])
     
     def compute_pv_analytically_wrapper(args):
         spot, rate, vola = args
         spots_deriv=[spot,spot,spot,spot]
         sigmas_deriv=[vola,vola,vola,vola]
-        model_deriv = BlackScholesMulti(0.0,rate,spots_deriv,sigmas_deriv,correlation_matrix)
+        model_deriv = BlackScholesMulti(0.0,rate,asset_ids,spots_deriv,sigmas_deriv,correlation_matrix)
         #product_deriv = BarrierOption(100, 120,BarrierOptionType.UPANDOUT,0.0,2.0,OptionType.CALL,True,10)
-        product_deriv = BasketOption(1.0,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
+        product_deriv = BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
         #product_deriv=BinaryOption(2.0,100,10,OptionType.CALL)
         
         return 0.25*float(product_deriv.compute_pv_analytically(model_deriv))

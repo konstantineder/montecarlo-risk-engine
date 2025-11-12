@@ -1,18 +1,22 @@
 from products.product import *
 from maths.maths import compute_degree_of_truth
-from request_interface.request_interface import AtomicRequestType, AtomicRequest
+from request_interface.request_types import AtomicRequestType, AtomicRequest
 from collections import defaultdict
 
-# Binary (digital) option
 class BinaryOption(Product):
-    def __init__(self, 
-                 maturity      : float, 
-                 strike        : float, 
-                 payment_amount: float, 
-                 option_type   : OptionType
-                 ):
+    """
+    Binary (digital) option
+    """
+    def __init__(
+        self, 
+        maturity      : float, 
+        strike        : float, 
+        payment_amount: float, 
+        option_type   : OptionType,
+        asset_id      : str | None = None,
+    ):
         
-        super().__init__()
+        super().__init__(asset_ids=[asset_id])
         self.maturity = torch.tensor([maturity], dtype=FLOAT,device=device)
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.option_type = option_type
@@ -22,17 +26,8 @@ class BinaryOption(Product):
         self.regression_timeline=torch.tensor([], dtype=FLOAT,device=device)
 
         self.numeraire_requests={0: AtomicRequest(AtomicRequestType.NUMERAIRE,maturity)}
-        self.spot_requests={0: AtomicRequest(AtomicRequestType.SPOT)}
-
-    def get_atomic_requests(self):
-        requests=defaultdict(list)
-        for t, req in self.numeraire_requests.items():
-            requests[t].append(req)
-
-        for t, req in self.spot_requests.items():
-            requests[t].append(req)
-
-        return requests
+        asset_id = self.get_asset_id()
+        self.spot_requests={(0, asset_id): AtomicRequest(AtomicRequestType.SPOT)}
 
     # Operator overloading of the payoff computation method
     # This method computes the payoff of a binary option based on the option type    
@@ -59,10 +54,20 @@ class BinaryOption(Product):
     
     
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None,state=None):
-        spots=resolved_requests[0][self.spot_requests[time_idx].handle]
+        spots=self.get_resolved_atomic_request(
+            resolved_atomic_requests=resolved_requests[0],
+            request_type=AtomicRequestType.SPOT,
+            time_idx=time_idx,
+            asset_id=self.get_asset_id()
+        )
         cfs = self.payoff(spots,model)
 
-        numeraire=resolved_requests[0][self.numeraire_requests[time_idx].handle]
+        numeraire=self.get_resolved_atomic_request(
+            resolved_atomic_requests=resolved_requests[0],
+            request_type=AtomicRequestType.NUMERAIRE,
+            time_idx=time_idx,
+        )
+        
         normalized_cfs=cfs/numeraire
 
         return state, normalized_cfs.unsqueeze(1)

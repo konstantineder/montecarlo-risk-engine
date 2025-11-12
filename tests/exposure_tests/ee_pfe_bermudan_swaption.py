@@ -1,6 +1,7 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import matplotlib.pyplot as plt
 from controller.controller import SimulationController
@@ -9,7 +10,6 @@ from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
 from products.bermudan_option import BermudanOption, OptionType
 from products.swap import InterestRateSwap, IRSType
-from engine.engine import SimulationScheme
 
 
 if __name__ == "__main__":

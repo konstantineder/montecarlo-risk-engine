@@ -1,6 +1,7 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import pandas as pd
 from IPython.display import display
@@ -10,7 +11,6 @@ from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
 from products.binary_option import BinaryOption, OptionType
-from engine.engine import SimulationScheme
 
 
 if __name__ == "__main__":

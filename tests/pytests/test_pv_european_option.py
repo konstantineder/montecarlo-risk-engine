@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
+from common.enums import SimulationScheme
 from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
@@ -36,7 +37,7 @@ def compute_prices_for_grid(param_grid, num_paths, steps):
     for T, S0, sigma, rate, strike in param_grid:
         model = BlackScholesModel(0, S0, rate, sigma)
 
-        underlying=Equity(id="")
+        underlying=Equity()
         product = EuropeanOption(underlying=underlying,exercise_date=T,strike=strike,option_type=OptionType.CALL)
 
         portfolio = [product]

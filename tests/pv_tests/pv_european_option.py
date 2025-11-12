@@ -11,7 +11,7 @@ from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
 from products.european_option import EuropeanOption, OptionType
 from products.equity import Equity
-from engine.engine import SimulationScheme
+from common.enums import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -40,7 +40,7 @@ if __name__ == "__main__":
         for T, S0, sigma, rate, strike in param_grid:
             model = BlackScholesModel(0, S0, rate, sigma)
 
-            underlying=Equity(id="")
+            underlying=Equity()
             product = EuropeanOption(underlying=underlying,exercise_date=T,strike=strike,option_type=OptionType.CALL)
 
             portfolio = [product]
@@ -93,7 +93,7 @@ if __name__ == "__main__":
         spot, rate, vola = args
         model_deriv = BlackScholesModel(0, spot, rate, vola)
 
-        underlying_deriv=Equity(id="")
+        underlying_deriv=Equity()
         product_deriv = EuropeanOption(underlying=underlying_deriv,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
         
         return float(product_deriv.compute_pv_analytically(model_deriv))

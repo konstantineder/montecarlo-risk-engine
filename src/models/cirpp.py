@@ -1,8 +1,9 @@
 # cirpp_model.py
 from models.model import *
 from request_interface.request_interface import AtomicRequest, AtomicRequestType
+from helpers.cs_helper import CSHelper
 
-class CIRppModel(Model):
+class CIRPPModel(Model):
     """
     Shifted Cox–Ingersoll–Ross (CIR++) intensity model for stochastic default intensities.
 
@@ -23,13 +24,17 @@ class CIRppModel(Model):
         self,
         calibration_date: float,
         asset_id: str,
-        hazard_rates: list[float],  # piecewise-constant bootstrapped market hazards (1y buckets)
+        hazard_rates: dict[float, float],  # piecewise-constant bootstrapped market hazards (1y buckets)
         kappa: float,
         theta: float,
         volatility: float,
         y0: float,
     ):
-        super().__init__(calibration_date=calibration_date, asset_ids=[asset_id])
+        super().__init__(
+            calibration_date=calibration_date, 
+            state_dim=2,
+            asset_ids=[asset_id],
+        )
 
         assert 2 * kappa * theta - volatility**2 > 0 and y0 > 0, "Feller condition not met."
 
@@ -39,8 +44,11 @@ class CIRppModel(Model):
             torch.tensor(volatility, dtype=FLOAT, device=device),
             torch.tensor(y0, dtype=FLOAT, device=device),
         ]
-        # store hazard curve as tensor (unit-spaced buckets 0-1y,1-2y,...)
-        self.hazard_curve = torch.tensor(hazard_rates, dtype=FLOAT, device=device)
+        
+        self.tenors = torch.tensor(list(hazard_rates.keys()), dtype=FLOAT, device=device)
+        self.hazard_rates = torch.tensor(list(hazard_rates.values()), dtype=FLOAT, device=device)
+        
+        self.cs_helper = CSHelper()
 
     # --------- Helpers to fetch parameters ----------
     def get_kappa(self):
@@ -59,44 +67,13 @@ class CIRppModel(Model):
     def _lambda_market(self, t: torch.Tensor) -> torch.Tensor:
         """
         Piecewise-constant hazard from the provided list.
-        Assumes hazards[i] applies on [i, i+1). For t beyond last bucket,
-        use last value.
+        For t beyond last bucket, use last value.
         """
-        # ensure tensor
-        t = torch.as_tensor(t, dtype=FLOAT, device=device)
-        idx = torch.clamp(torch.floor(t).long(), min=0, max=self.hazard_curve.numel() - 1)
-        return self.hazard_curve[idx]
-
-    def _cum_hazard_market(self, t: torch.Tensor) -> torch.Tensor:
-        """
-        Λ_m(t) = ∫_0^t λ_m(u) du under piecewise-constant 1y buckets.
-        """
-        t = torch.as_tensor(t, dtype=FLOAT, device=device)
-        # full 1y chunks
-        n_full = torch.clamp(torch.floor(t).long(), min=0)
-        # sum hazards for full years
-        # handle scalar vs tensor
-        if t.ndim == 0:
-            n = int(n_full.item())
-            full = self.hazard_curve[: min(n, self.hazard_curve.numel())].sum() if n > 0 else torch.tensor(0.0, dtype=FLOAT, device=device)
-            rem = t - float(n)
-            lam_rem = self.hazard_curve[min(n, self.hazard_curve.numel() - 1)] if rem > 0 else torch.tensor(0.0, dtype=FLOAT, device=device)
-            return full + lam_rem * torch.clamp(rem, min=0.0)
-        else:
-            # vectorized
-            # prefix sums for fast block sums
-            csum = torch.cat([torch.zeros(1, dtype=FLOAT, device=device), torch.cumsum(self.hazard_curve, dim=0)])
-            # clip n_full to curve length
-            n_clip = torch.clamp(n_full, max=self.hazard_curve.numel())
-            full = csum[n_clip]
-            rem = t - n_full.to(t.dtype)
-            last_idx = torch.clamp(n_full, max=self.hazard_curve.numel() - 1)
-            lam_rem = self.hazard_curve[last_idx] * (rem.clamp(min=0.0))
-            return full + lam_rem
-
-    def Sm0(self, t: torch.Tensor) -> torch.Tensor:
-        """Initial market survival S_m(0,t) = exp(-Λ_m(t))."""
-        return torch.exp(-self._cum_hazard_market(t))
+        for idx, tenor in enumerate(self.tenors):
+            if t <= tenor:
+                return self.hazard_rates[idx]
+        idx = len(self.tenors) - 1
+        return self.hazard_rates[idx]
 
     # --------- CIR++ shift ψ(t) = λ_m(t) + D(t) - y0 E(t)  ----------
     # h, A, B as in the paper (with T>t). :contentReference[oaicite:4]{index=4}
@@ -155,29 +132,46 @@ class CIRppModel(Model):
     # --------- Model state, simulation ----------
     def get_state(self, num_paths: int):
         """Return initial state y0 expanded to num_paths."""
-        y0 = self.get_y0()
-        return y0.expand(num_paths).clone()
+        y0 = self.get_y0().expand(num_paths)
+        log_B0 = torch.zeros_like(y0, dtype=FLOAT, device=device)
+        state = torch.stack([y0, log_B0], dim=-1) 
+        return state
 
-    def simulate_time_step_euler(self, delta_t: float, state: torch.Tensor, num_paths: int) -> torch.Tensor:
+    def simulate_time_step_euler(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor   
+    ) -> torch.Tensor:
         """
         Euler–Maruyama (full-truncation) for CIR:
             y_{t+Δ} = y + κ(θ - y)+ σ sqrt(max(y,0)) sqrt(Δ) z
         """
+        delta_t = time2 - time1
         kappa = self.get_kappa()
         theta = self.get_theta()
         sigma = self.get_sigma()
-        y = state
-        z = torch.randn(num_paths, dtype=FLOAT, device=device)
+        y = state[:,0:1]
+        log_B = state[:,1:2]
         sqrt_y = torch.sqrt(torch.clamp(y, min=0.0))
-        y_next = y + kappa * (theta - y) * delta_t + sigma * sqrt_y * torch.sqrt(torch.tensor(delta_t, dtype=FLOAT, device=device)) * z
-        return torch.clamp(y_next, min=1e-12)
+        y_next = y + kappa * (theta - y) * delta_t + sigma * sqrt_y * torch.sqrt(delta_t) * corr_randn
+        log_B_next = log_B + self.lambda_t(time1, y) * delta_t
+        return torch.stack([torch.clamp(y_next, min=1e-12).squeeze(-1), log_B_next.squeeze(-1)], dim=-1)
 
-    def simulate_time_step_analytically(self, delta_t: float, state: torch.Tensor, corr_randn: torch.Tensor) -> torch.Tensor:
+    def simulate_time_step_analytically(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor      
+    ) -> torch.Tensor:
         """
         Proxy 'analytic' step via moment-matching lognormal proxy for y(t+dt).
         For production, you can swap to exact noncentral-χ² sampling for CIR. :contentReference[oaicite:6]{index=6}
         """
         # compute conditional mean/variance of CIR and sample via lognormal proxy
+        delta_t = time2 - time1
         kappa = self.get_kappa().item()
         theta = self.get_theta().item()
         sigma = self.get_sigma().item()
@@ -222,8 +216,16 @@ class CIRppModel(Model):
         B0T = self._B(torch.tensor(0.0, dtype=FLOAT, device=device), T)
 
         # Sm(0,·)
-        Sm0_t = self.Sm0(t)
-        Sm0_T = self.Sm0(T)
+        Sm0_t = 1.0 - self.cs_helper.probability_of_default(
+            hazards=self.hazard_rates, 
+            tenors=self.tenors,
+            date=t
+            )
+        Sm0_T = 1.0 - self.cs_helper.probability_of_default(
+            hazards=self.hazard_rates, 
+            tenors=self.tenors,
+            date=T
+            )
 
         y0 = self.get_y0()
         A_tT = self._A(t, T)
@@ -246,34 +248,23 @@ class CIRppModel(Model):
         return -torch.log(inside) / dt
 
     # --------- Requests ----------
-    def resolve_request(self, req: AtomicRequest, asset_id: str, state: torch.Tensor):
+    def resolve_request(self, req: AtomicRequest, asset_id: str, state: torch.Tensor) -> torch.Tensor:
         """
         Supported custom request types (rename to your real enum values if needed):
-          - AtomicRequestType.SURVIVAL_PROBABILITY  (expects req.time1=t, req.time2=T)
-          - AtomicRequestType.DEFAULT_INTENSITY     (expects req.time1=t)
-          - AtomicRequestType.CUMULATIVE_HAZARD     (expects req.time1=t, returns Λ_m(t))
-          - AtomicRequestType.CREDIT_SPREAD         (expects req.time1=t, req.time2=T, optional req.recovery)
+          - AtomicRequestType.SURVIVAL_PROBABILITY 
+          - AtomicRequestType.CONDITIONAL_SURVIVAL_PROBABILITY   (expects req.time1=t, req.time2=T)
         """
         # state is y(t) for each path
-        if req.request_type == AtomicRequestType.FORWARD_RATE:
-            t = torch.tensor(req.time1, dtype=FLOAT, device=device)
-            T = torch.tensor(req.time2, dtype=FLOAT, device=device)
-            # broadcast: use pathwise y(t)
-            return self.survival_probability(t, T, state)
+        if req.request_type == AtomicRequestType.CONDITIONAL_SURVIVAL_PROBABILITY:
+            t = req.time1
+            T = req.time2
+            y = state[:,0]
 
-        elif req.request_type == AtomicRequestType.SPOT:
-            t = torch.tensor(req.time1, dtype=FLOAT, device=device)
-            return self.lambda_t(t, state)
-
-        elif req.request_type == getattr(AtomicRequestType, "CUMULATIVE_HAZARD", None):
-            t = torch.tensor(req.time1, dtype=FLOAT, device=device)
-            return self._cum_hazard_market(t)
-
-        elif req.request_type == getattr(AtomicRequestType, "CREDIT_SPREAD", None):
-            t = torch.tensor(req.time1, dtype=FLOAT, device=device)
-            T = torch.tensor(req.time2, dtype=FLOAT, device=device)
-            delta = getattr(req, "recovery", 0.40)
-            return self.credit_spread(t, T, state, delta=float(delta))
+            return self.survival_probability(t, T, y)
+        
+        if req.request_type == AtomicRequestType.SURVIVAL_PROBABILITY:
+            log_B_t=state[:,1]
+            return torch.exp(log_B_t) 
 
         else:
             raise NotImplementedError(f"Request type {req.request_type} not supported by CIRpp.")

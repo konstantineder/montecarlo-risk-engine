@@ -7,14 +7,18 @@ class VasicekModel(Model):
     def __init__(
         self, 
         calibration_date     : float,  # Calibration date of the model
-        asset_id             : str,
         rate                 : float,  # Short rate at calibration date
         mean                 : float,  # Long-term mean level the rate reverts to
         mean_reversion_speed : float,  # Speed at which the rate reverts to the long-term mean
-        volatility           : float   # Volatility of the short rate
+        volatility           : float,  # Volatility of the short rate
+        asset_id             : str | None = None,
     ):
         
-        super().__init__(calibration_date=calibration_date, asset_ids=[asset_id])
+        super().__init__(
+            calibration_date=calibration_date, 
+            state_dim=2,
+            asset_ids=[asset_id]
+        )
         # Collect all model parameters in common PyTorch tensor
         # If AAD is enabled the respective adjoints are accumulated
         self.model_params = [
@@ -42,22 +46,28 @@ class VasicekModel(Model):
         state = torch.stack([r0, log_B0], dim=-1)  # (N, 2)
         return state
     
-    def generate_correlated_randn(self, num_paths: int, delta_t: float) -> torch.Tensor:
-        sigma = self.get_volatility()
-        z = torch.randn(num_paths, dtype=FLOAT, device=device)
-        return sigma * torch.sqrt(delta_t) * z
+    def _get_covariance_matrix(self, delta_t: torch.Tensor) -> torch.Tensor:
+        """Compute covariance matrix for time delta."""
+        sigma = self.get_volatility()  
+        a=self.get_mean_reversion_speed()
+        exp_decay = torch.exp(-a * delta_t)
+        variance = (sigma ** 2 / (2 * a)) * (1 - exp_decay ** 2)
+        cov_matrix = torch.diag(variance)
+        return cov_matrix
     
     def simulate_time_step_analytically(
-        self, 
-        delta_t: float, 
-        state: torch.Tensor,        # shape (N, 2) = [r_t, log_B_t]
-        corr_radn: torch.Tensor    # shape (N,), standard normal
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor  
     ) -> torch.Tensor:
         """
         Exact discretization for Vasicek:
             r_{t+Δ} = θ + (r_t - θ) e^{-aΔ} + sqrt( (σ^2 / (2a)) (1 - e^{-2aΔ}) ) * Z
             log_B accumulates ∫ r_s ds numerically (left Riemann) here: log_B_{t+Δ} ≈ log_B_t + r_t Δ
         """
+        delta_t = time2 - time1
         r_t = state[:, 0]
         log_B_t = state[:, 1]
         a = self.get_mean_reversion_speed()
@@ -68,32 +78,35 @@ class VasicekModel(Model):
 
         exp_decay = torch.exp(-a * delta_t)
         mean = theta + (r_t - theta) * exp_decay
-        noise = (1.0 ** 2) * (1.0 - torch.exp(-2.0 * a * delta_t)) / (2.0 * a)
-        r_next = mean + torch.sqrt(noise) * corr_radn
+        r_next = mean + corr_randn
 
         return torch.stack([r_next, log_B_t], dim=-1)
     
     def simulate_time_step_euler(
-        self, 
-        delta_t: float, 
-        state: torch.Tensor,        
-        corr_randn: torch.Tensor   
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor    
     ) -> torch.Tensor:
         """
         Euler–Maruyama step:
             r_{t+Δ} = r_t + a(θ - r_t)Δ + σ√Δ Z
             log_B_{t+Δ} ≈ log_B_t + r_t Δ
         """
-        r_t = state[:, 0]
-        log_B_t = state[:, 1]
+        delta_t = time2 - time1
+        r_t = state[:, 0:1]
+        log_B_t = state[:, 1:2]
         a = self.get_mean_reversion_speed()
         theta = self.get_mean()
+        sigma = self.get_volatility()
 
         log_B_t += r_t * delta_t
         drift = a * (theta - r_t) * delta_t
-        r_next = r_t + drift + corr_randn
+        diffusion = sigma * torch.sqrt(delta_t) * corr_randn
+        r_next = r_t + drift + diffusion
 
-        return torch.stack([r_next, log_B_t], dim=-1)   
+        return torch.stack([r_next.squeeze(-1), log_B_t.squeeze(-1)], dim=-1)   
     
     def compute_bond_price(self, time1, time2, rate):
         """Use analytic formula for Zerobond price in Vasicek model."""
@@ -111,7 +124,12 @@ class VasicekModel(Model):
 
         return A * torch.exp(-B * rate)
     
-    def resolve_request(self, req: AtomicRequest, asset_id: str, state: torch.Tensor) -> torch.Tensor:
+    def resolve_request(
+        self, 
+        req: AtomicRequest, 
+        asset_id: str, 
+        state: torch.Tensor
+    ) -> torch.Tensor:
         """# Resolve requests posed by all products and at each exposure timepoint."""
         if req.request_type == AtomicRequestType.SPOT:
             return state[:,0] 

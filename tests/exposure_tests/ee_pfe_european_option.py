@@ -1,16 +1,16 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 from controller.controller import SimulationController
-from models.black_scholes import *
-from metrics.pfe_metric import *
-from metrics.epe_metric import *
-from products.european_option import *
+from models.black_scholes import BlackScholesModel
+from metrics.pfe_metric import PFEMetric
+from metrics.epe_metric import EPEMetric
+from products.european_option import EuropeanOption, OptionType
 from products.equity import Equity
-from engine.engine import *
 
 
 if __name__ == "__main__":
@@ -23,7 +23,7 @@ if __name__ == "__main__":
     maturity = 3.0
     strike = 100.0
 
-    underlying=Equity(id="")
+    underlying=Equity()
     product = EuropeanOption(underlying=underlying,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
 
     portfolio=[product]

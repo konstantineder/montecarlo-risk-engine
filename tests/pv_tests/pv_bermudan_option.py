@@ -10,7 +10,7 @@ from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
 from products.bermudan_option import AmericanOption, OptionType
 from products.equity import Equity
-from engine.engine import SimulationScheme
+from common.enums import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     os.makedirs(out_dir, exist_ok=True)
 
     out_path = os.path.join(out_dir, "pv_bermudan_option.png")
-    plt.savefig(out_path)
+    plt.show()
     print(f"Plot saved to {out_path}")
 
 

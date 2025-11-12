@@ -1,6 +1,7 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import matplotlib.pyplot as plt
 from controller.controller import SimulationController
@@ -9,7 +10,6 @@ from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
 from products.flexicall import FlexiCall, EuropeanOption, OptionType
 from products.equity import Equity
-from engine.engine import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -20,7 +20,7 @@ if __name__ == "__main__":
     model = BlackScholesModel(calibration_date=0.0, spot=100, rate=0.05, sigma=0.5)
     exercise_dates = [0.5,1.0,1.5,2.0,2.5,3.0]
     maturity = 3.0
-    strikes = [100.0, 100.0, 1000.0, 1000.0, 1000.0, 1000.0]
+    strikes = [100.0, 1000.0, 100.0, 1000.0, 100.0, 1000.0]
 
     underlying=Equity('id')
     underlyings_options = []
@@ -66,6 +66,6 @@ if __name__ == "__main__":
     out_dir = os.path.join("tests", "plots", "exposure_tests")
     os.makedirs(out_dir, exist_ok=True)
 
-    out_path = os.path.join(out_dir, "exposure_bermudan_flexicall.png")
+    out_path = os.path.join(out_dir, "exposure_flexicall.png")
     plt.savefig(out_path)
     print(f"Plot saved to {out_path}")

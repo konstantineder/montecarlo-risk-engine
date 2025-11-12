@@ -2,9 +2,8 @@ from context import *
 import pytest
 import torch
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from itertools import product as cartesian_product
+from common.packages import device
+from common.enums import SimulationScheme
 from controller.controller import SimulationController
 from models.black_scholes_multi import BlackScholesMulti
 from metrics.pv_metric import PVMetric
@@ -14,7 +13,6 @@ from engine.engine import SimulationScheme
 
 def test_pv_basket_option():
     # # --- GPU device setup ---
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     num_assets=4
@@ -27,7 +25,7 @@ def test_pv_basket_option():
     ])
 
     #sigmas, corr = compute_sigmas_and_correlation_from_cholesky(L)
-    asset_ids = ["1","2","3","4"]
+    asset_ids = ["asset1", "asset2", "asset3", "asset4"]
     spots=[100.0,100.0,100.0,100.0]
     sigmas=[0.4,0.4,0.4,0.4]
     rate=0.0
@@ -43,14 +41,16 @@ def test_pv_basket_option():
     num_paths = 1000000
     steps = 1
 
-    sc=SimulationController(portfolio=portfolio, 
-                            model=model, 
-                            metrics=metrics, 
-                            num_paths_mainsim=num_paths, 
-                            num_paths_presim=0, 
-                            num_steps=steps, 
-                            simulation_scheme=SimulationScheme.ANALYTICAL, 
-                            differentiate=False)
+    sc=SimulationController(
+        portfolio=portfolio, 
+        model=model, 
+        metrics=metrics, 
+        num_paths_mainsim=num_paths, 
+        num_paths_presim=0, 
+        num_steps=steps, 
+        simulation_scheme=SimulationScheme.ANALYTICAL, 
+        differentiate=False
+    )
     
     sim_results=sc.run_simulation()
     price_basket=sim_results.get_results(0,0)[0]

@@ -11,8 +11,8 @@ class MetricType(Enum):
     EEPE = 5
     CVA = 6
 
-# Base metric class to be overwritten by all spectific metric implementations
 class Metric:
+    """Base metric class to be overwritten by all spectific metric implementations."""
     class EvaluationType(Enum):
          ANALYTICAL=0
          NUMERICAL=1
@@ -20,18 +20,16 @@ class Metric:
     def __init__(self, metric_type, evaluation_type):
         self.metric_type=metric_type
         self.evaluation_type=evaluation_type
-        self.regression_coeffs=[]
 
-    def evaluate_analytically(self, *args, **kwargs):
+    def evaluate_analytically(self, **kwargs):
         raise NotImplementedError("Analytical evaluation not implemented.")
     
-    def evaluate_numerically(self, *args, **kwargs):
+    def evaluate_numerically(self, **kwargs):
         raise NotImplementedError("Numerical evluation not implemented.")
 
-
-    def evaluate(self,exposures,cfs):
+    def evaluate(self,**kwargs):
         if self.evaluation_type==Metric.EvaluationType.NUMERICAL:
-            return self.evaluate_numerically(exposures,cfs)
+            return self.evaluate_numerically(**kwargs)
         else:
-            return self.evaluate_analytically(exposures,cfs)
+            return self.evaluate_analytically(**kwargs)
         

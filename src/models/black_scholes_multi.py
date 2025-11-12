@@ -16,7 +16,12 @@ class BlackScholesMulti(Model):
         correlation_matrix : NDArray[Any]  # Correlations amonng assets
     ):
         
-        super().__init__(calibration_date=calibration_date,asset_ids=asset_ids)
+        super().__init__(
+            calibration_date=calibration_date,
+            simulation_dim=len(asset_ids),
+            state_dim=len(spots),
+            asset_ids=asset_ids,
+        )
         # Collect all model parameters in common PyTorch tensor
         # If AAD is enabled the respective adjoints are accumulated
         self.model_params = [
@@ -25,10 +30,6 @@ class BlackScholesMulti(Model):
         ]
 
         self.correlation_matrix = torch.tensor(correlation_matrix, dtype=FLOAT, device=device)
-        self.num_assets=len(spots)
-
-        # Store computed Cholesky matrix for each time delta
-        self.cholesky = {}
     
     # Retrieve model parameters
     def get_spot(self):
@@ -41,48 +42,44 @@ class BlackScholesMulti(Model):
         return self.model_params[2*self.num_assets]
     
     def get_state(self, num_paths: int):
-        spot = self.get_spot()
-        return torch.log(spot).expand(num_paths, self.num_assets).clone()
+        return self.get_spot().expand(num_paths, self.num_assets).clone()
+    
+    def _get_correlation_matrix(self) -> torch.Tensor:
+        """Compute covrrelation_matrix."""
+        return self.correlation_matrix
 
-    def compute_cov_matrix(self, delta_t):
+    def _get_covariance_matrix(self, delta_t: torch.Tensor) -> torch.Tensor:
         """Compute covariance matrix for time delta."""
         S = torch.diag(self.get_volatility())
         cov_matrix = S @ self.correlation_matrix @ S
         cov_matrix = cov_matrix*delta_t
         return cov_matrix
-
-    def compute_cholesky(self, delta_t):
-        """Compute Cholesky decomposition of covariance matrix.
         
-        if Cholesky matrix has not yet been computed for current time delta
-        otherwise retrieve stored matrix
-        """
-        dt = float(delta_t)
-        if dt in self.cholesky:
-            return self.cholesky[dt]
-        else:
-            cov_matrix = self.compute_cov_matrix(delta_t)
-            chol = torch.linalg.cholesky(cov_matrix)
-            self.cholesky[dt] = chol
-            return chol
-        
-    def generate_correlated_randn(self, num_paths: int, delta_t: float) -> torch.Tensor:
-        cholesky = self.compute_cholesky(delta_t=delta_t)
-        z = torch.randn(num_paths, self.num_assets, dtype=FLOAT, device=device)
-        return z @ cholesky.T
-        
-    def simulate_time_step_analytically(self, delta_t: float, state: torch.Tensor, corr_randn: torch.Tensor) -> torch.Tensor:
+    def simulate_time_step_analytically(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor      
+    ) -> torch.Tensor:
         """
         state:  (N, markov_dim) or (markov_dim,)
         randn:  same shape as state (noise already correlated)
         """
+        delta_t = time2 - time1
         rate = self.get_rate()
         
         sigma = self.get_volatility().reshape(1, -1) 
         drift = (rate - 0.5 * sigma * sigma) * delta_t
-        return state + drift + corr_randn
+        return state * torch.exp(drift + corr_randn)
 
-    def simulate_time_step_euler(self, state: torch.Tensor, randn: torch.Tensor) -> torch.Tensor:
+    def simulate_time_step_euler(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor      
+    ) -> torch.Tensor:
         """
         Euler–Maruyama step for BS multi asset model.
         """
@@ -93,7 +90,7 @@ class BlackScholesMulti(Model):
         if req.request_type == AtomicRequestType.SPOT:
             asset_idx = self.asset_ids.index(asset_id)
             state_asset = state[:,asset_idx]
-            spot = torch.exp(state_asset)
+            spot = state_asset
             return spot
 
         elif req.request_type == AtomicRequestType.DISCOUNT_FACTOR:

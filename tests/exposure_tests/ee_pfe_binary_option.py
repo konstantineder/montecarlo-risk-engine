@@ -1,6 +1,7 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import matplotlib.pyplot as plt
 from controller.controller import SimulationController
@@ -8,7 +9,6 @@ from models.black_scholes import BlackScholesModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
 from products.binary_option import BinaryOption, OptionType
-from engine.engine import SimulationScheme
 
 
 if __name__ == "__main__":
