@@ -1,16 +1,17 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 from controller.controller import SimulationController
-from models.black_scholes import *
-from metrics.pfe_metric import *
-from metrics.epe_metric import *
-from products.european_option import *
+from models.black_scholes import BlackScholesModel
+from metrics.pfe_metric import PFEMetric
+from metrics.epe_metric import EPEMetric
+from metrics.risk_metrics import RiskMetrics
+from products.european_option import EuropeanOption, OptionType
 from products.equity import Equity
-from engine.engine import *
 
 
 if __name__ == "__main__":
@@ -23,7 +24,7 @@ if __name__ == "__main__":
     maturity = 3.0
     strike = 100.0
 
-    underlying=Equity(id="")
+    underlying=Equity()
     product = EuropeanOption(underlying=underlying,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
 
     portfolio=[product]
@@ -34,11 +35,12 @@ if __name__ == "__main__":
     pfe_metric = PFEMetric(0.9)
 
     metrics=[ee_metric, pfe_metric]
+    risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
 
     num_paths_mainsim=10000
     num_paths_presim=100000
     num_steps=1
-    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.ANALYTICAL, False, exposure_timeline)
+    sc=SimulationController(portfolio, model, risk_metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.ANALYTICAL, False)
 
     sim_results=sc.run_simulation()
 

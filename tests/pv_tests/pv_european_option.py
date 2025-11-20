@@ -9,9 +9,10 @@ from itertools import product as cartesian_product
 from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
+from metrics.risk_metrics import RiskMetrics
 from products.european_option import EuropeanOption, OptionType
 from products.equity import Equity
-from engine.engine import SimulationScheme
+from common.enums import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -40,15 +41,15 @@ if __name__ == "__main__":
         for T, S0, sigma, rate, strike in param_grid:
             model = BlackScholesModel(0, S0, rate, sigma)
 
-            underlying=Equity(id="")
+            underlying=Equity()
             product = EuropeanOption(underlying=underlying,exercise_date=T,strike=strike,option_type=OptionType.CALL)
 
             portfolio = [product]
-            metrics=[PVMetric()]
+            risk_metrics=RiskMetrics(metrics=[PVMetric()])
 
             price_analytical = product.compute_pv_analytically(model)
 
-            sc=SimulationController(portfolio, model, metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
+            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
 
             sim_results=sc.run_simulation()
             price_sim=sim_results.get_results(0,0)
@@ -93,7 +94,7 @@ if __name__ == "__main__":
         spot, rate, vola = args
         model_deriv = BlackScholesModel(0, spot, rate, vola)
 
-        underlying_deriv=Equity(id="")
+        underlying_deriv=Equity()
         product_deriv = EuropeanOption(underlying=underlying_deriv,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
         
         return float(product_deriv.compute_pv_analytically(model_deriv))

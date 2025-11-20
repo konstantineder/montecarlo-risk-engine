@@ -1,15 +1,16 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import matplotlib.pyplot as plt
 from controller.controller import SimulationController
 from models.vasicek import VasicekModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
+from metrics.risk_metrics import RiskMetrics
 from products.bermudan_option import BermudanOption, OptionType
 from products.bond import Bond
-from engine.engine import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -22,8 +23,19 @@ if __name__ == "__main__":
     maturity = 3.0
     strike = 0.5
 
-    underlying=Bond(startdate=0.0,maturity=3.0,notional=1.0,tenor=3.0, pays_notional=True, fixed_rate=0.0)
-    product = BermudanOption(underlying=underlying, exercise_dates=exercise_dates, strike=strike, option_type=OptionType.CALL)
+    underlying=Bond(
+        startdate=0.0,maturity=3.0,
+        notional=1.0,
+        tenor=3.0, 
+        pays_notional=True, 
+        fixed_rate=0.0
+    )
+    product = BermudanOption(
+        underlying=underlying, 
+        exercise_dates=exercise_dates, 
+        strike=strike, 
+        option_type=OptionType.CALL
+    )
 
     portfolio=[product]
 
@@ -33,11 +45,21 @@ if __name__ == "__main__":
     pfe_metric = PFEMetric(0.9)
 
     metrics=[ee_metric, pfe_metric]
+    risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
 
     num_paths_mainsim=10000
     num_paths_presim=100000
     num_steps=1
-    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False, exposure_timeline)
+    sc = SimulationController(
+        portfolio=portfolio, 
+        model=model, 
+        risk_metrics=risk_metrics, 
+        num_paths_mainsim=num_paths_mainsim, 
+        num_paths_presim=num_paths_presim, 
+        num_steps=num_steps, 
+        simulation_scheme=SimulationScheme.EULER, 
+        differentiate=False,
+    )
 
     sim_results=sc.run_simulation()
 

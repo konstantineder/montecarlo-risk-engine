@@ -1,21 +1,28 @@
 from models.model import *
 from request_interface.request_interface import AtomicRequestType
 
-# Black-Scholes model for a single asset
 class BlackScholesModel(Model):
-    def __init__(self, 
-                 calibration_date : float, # Date of model calibration
-                 spot             : float, # Spot price of the asset
-                 rate             : float, # Risk-free interest rate
-                 sigma            : float  # Volatility
-                 ):
-        
-        super().__init__(calibration_date)
+    """Black-Scholes model for a single asset."""
+    
+    def __init__(
+        self, 
+        calibration_date : float, # Date of model calibration
+        spot             : float, # Spot price of the asset
+        rate             : float, # Risk-free interest rate
+        sigma            : float, # Volatility
+        asset_id         : str | None = None,
+    ):
+        asset_ids = [asset_id] if asset_id else None
+        super().__init__(
+            calibration_date=calibration_date, 
+            asset_ids=asset_ids
+        )
         # Collect all model parameters in common PyTorch tensor
         # If AAD is enabled the respective adjoints are accumulated
         self.model_params = [
-            torch.tensor(param, dtype=FLOAT, device=device)
-            for param in list([spot]) + list([sigma]) + list([rate])
+            torch.tensor(spot, dtype=FLOAT, device=device),
+            torch.tensor(sigma, dtype=FLOAT, device=device),
+            torch.tensor(rate, dtype=FLOAT, device=device),
         ]
 
     # Retrieve specific model parameters
@@ -27,63 +34,58 @@ class BlackScholesModel(Model):
 
     def get_rate(self):
         return torch.stack([self.model_params[2]])
-
-    # Simulate Monte Carlo paths using analytic formulae
-    def generate_paths_analytically(self, timeline, num_paths, num_steps):
-
-        spot = self.get_spot().expand(num_paths).clone()
-        sigma=self.get_volatility()
-        rate=self.get_rate()
-        paths = []
-
-        t_start=self.calibration_date
-
-        for i in range(len(timeline)):
-            t_end = timeline[i]
-            dt_total = t_end - t_start
-            dt = dt_total / num_steps
-
-            for _ in range(num_steps):
-                z = torch.randn(num_paths, dtype=FLOAT, device=device)
-                drift=rate*dt
-                diffusion=sigma*torch.sqrt(dt)*z-0.5*dt*sigma**2
-                spot = spot*torch.exp(drift+diffusion)
-
-            paths.append(spot)
-            t_start=t_end
-
-        return torch.stack(paths, dim=1)
     
-    # Simulate Monte Carlo paths applying Euler-Mayurama scheme 
-    def generate_paths_euler(self, timeline, num_paths, num_steps):
-        spot = self.get_spot().expand(num_paths).clone()
-        sigma = self.get_volatility()
-        rate= self.get_rate()
-        paths = []
-
-        t_start=self.calibration_date
-
-        for i in range(len(timeline)):
-            t_start = timeline[i]
-            t_end = timeline[i + 1]
-            dt_total = t_end - t_start
-            dt = dt_total / num_steps
-
-            for _ in range(num_steps):
-                z = torch.randn(num_paths, device=device)
-                dS = rate * spot * dt + sigma * spot * torch.sqrt(dt) * z
-                spot = spot + dS
-
-            paths.append(spot)
-            t_start=t_end
-
-        return torch.stack(paths, dim=1)  # shape: [num_paths, len(timeline)]
+    def get_state(self, num_paths: int):
+        return self.get_spot().expand(num_paths).unsqueeze(-1).clone()
     
-    # Resolve requests posed by all products and at each exposure timepoint
-    def resolve_request(self, req, state):
+    def _get_covariance_matrix(self, delta_t: torch.Tensor) -> torch.Tensor:
+        """Compute covariance matrix for time delta."""
+        sigma = self.get_volatility()                
+        cov_matrix = torch.diag(sigma * sigma * delta_t)
+        return cov_matrix
+
+    def simulate_time_step_analytically(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor  
+    ) -> torch.Tensor:
+        """
+        state:  (markov_dim,)
+        randn:  same shape as state (noise already correlated)
+        """
+        delta_t = time2 - time1
+        rate = self.get_rate().squeeze(-1)
+        sigma = self.get_volatility().squeeze(-1)
+        
+        drift = rate * delta_t
+        diffusion = corr_randn - 0.5 * delta_t * sigma**2
+        return state * torch.exp(drift + diffusion)
+
+    def simulate_time_step_euler(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor  
+    ) -> torch.Tensor:
+        """
+        Euler–Maruyama step for BS multi asset model.
+        """
+        delta_t = time2 -time1
+        rate = self.get_rate().squeeze(-1)
+        sigma = self.get_volatility().squeeze(-1)
+        
+        dS = rate * state * delta_t + sigma * state * torch.sqrt(delta_t) * corr_randn
+        state = state + dS
+        return state
+    
+    def resolve_request(self, req, asset_id, state):
+        """Resolve requests posed by all products and at each exposure timepoint."""
 
         if req.request_type == AtomicRequestType.SPOT:
-            return state
+            return state.squeeze(-1)
         elif req.request_type == AtomicRequestType.DISCOUNT_FACTOR:
             t = req.time1
             rate=self.get_rate()
@@ -102,4 +104,5 @@ class BlackScholesModel(Model):
             t = req.time1
             rate=self.get_rate()
             return torch.exp(rate * (t - self.calibration_date))
-            # Add more request types as needed
+        else:
+            raise NotImplementedError(f"Request type {req.request_type} not supported.")

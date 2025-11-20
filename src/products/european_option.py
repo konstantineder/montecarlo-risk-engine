@@ -1,6 +1,6 @@
 from products.product import *
 from math import pi
-from request_interface.request_interface import AtomicRequestType, CompositeRequest, AtomicRequest
+from request_interface.request_types import AtomicRequestType, AtomicRequest
 from collections import defaultdict
 from typing import Sequence, List, Optional, Dict, Any
 from models.model import Model
@@ -8,18 +8,22 @@ from models.black_scholes import BlackScholesModel
 from models.vasicek import VasicekModel
 from products.bond import Bond
 
-# European option implementation
-# Payoff depends on specification of the underlying
-# Current product classes supported for underlying: Equity, Bond and Swap
 class EuropeanOption(Product):
-    def __init__(self, 
-                 underlying     : Product, 
-                 exercise_date  : float, 
-                 strike         : float,
-                 option_type    : OptionType
-                 ):
+    """
+    European option implementation
+    Payoff depends on specification of the underlying
+    Current product classes supported for underlying: Equity, Bond and Swap
+    """
+    def __init__(
+        self, 
+        underlying     : Product, 
+        exercise_date  : float, 
+        strike         : float,
+        option_type    : OptionType,
+        asset_id       : str | None = None,
+    ):
         
-        super().__init__()
+        super().__init__(asset_ids=[asset_id])
         self.exercise_date = torch.tensor([exercise_date], dtype=FLOAT,device=device)
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.option_type = option_type
@@ -29,26 +33,13 @@ class EuropeanOption(Product):
         self.underlying=underlying
 
         self.numeraire_requests={0: AtomicRequest(AtomicRequestType.NUMERAIRE,exercise_date)}
-        self.underlying_request={0: underlying.generate_composite_requests_for_date(exercise_date)}
-    
-    def get_atomic_requests(self):
-        requests=defaultdict(list)
-        for t, req in self.numeraire_requests.items():
-            requests[t].append(req)
+        self.underlying_requests={0: underlying.generate_underlying_requests_for_date(exercise_date)}
 
-        return requests
-    
-    def get_composite_requests(self):
-        comp_requests=defaultdict(list)
-        for time, comp_req in self.underlying_request.items():
-            comp_requests[time].append(comp_req)
-
-        return comp_requests
-
-    def payoff(self, 
-               spots: Sequence[torch.Tensor], 
-               model: Model
-               ):
+    def payoff(
+        self, 
+        spots: Sequence[torch.Tensor], 
+        model: Model
+    ):
         
         zero = torch.tensor([0.0], dtype=FLOAT, device=device)
         if self.option_type == OptionType.CALL:
@@ -56,18 +47,24 @@ class EuropeanOption(Product):
         else:
             return torch.maximum(self.strike - spots, zero)
 
-    
-    def compute_normalized_cashflows(self, 
-                                     time_idx: int, 
-                                     model: Model, 
-                                     resolved_requests: List[dict], 
-                                     regression_function: RegressionFunction = None, 
-                                     state: Optional[object] = None):
+    def compute_normalized_cashflows(
+        self, 
+        time_idx: int, 
+        model: Model, 
+        resolved_requests: List[dict], 
+        regression_function: RegressionFunction | None = None, 
+        state: torch.Tensor | None = None,
+    ):
         
-        spots=resolved_requests[1][self.underlying_request[time_idx].get_handle()]
+        spots=resolved_requests[1][self.underlying_requests[time_idx].get_handle()]
         cfs = self.payoff(spots,model)
 
-        numeraire=resolved_requests[0][self.numeraire_requests[time_idx].handle]
+        numeraire=self.get_resolved_atomic_request(
+            resolved_atomic_requests=resolved_requests[0],
+            request_type=AtomicRequestType.NUMERAIRE,
+            time_idx=time_idx,
+        )
+        
         normalized_cfs=cfs/numeraire
 
         return state, normalized_cfs.unsqueeze(1)

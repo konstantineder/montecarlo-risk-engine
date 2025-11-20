@@ -13,4 +13,4 @@ mcengine/
 dist/
 build/
 tests/plots/
-tests/notebooks/data/
+tests/data/

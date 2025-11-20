@@ -1,6 +1,7 @@
 from context import *
 
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,9 +9,9 @@ from itertools import product as cartesian_product
 from controller.controller import SimulationController
 from models.vasicek import VasicekModel
 from metrics.pv_metric import PVMetric
+from metrics.risk_metrics import RiskMetrics
 from products.european_option import EuropeanOption, OptionType
 from products.bond import Bond
-from engine.engine import SimulationScheme
 from maths.regression import PolyomialRegression
 
 
@@ -45,12 +46,12 @@ if __name__ == "__main__":
             product = EuropeanOption(underlying=underlying,exercise_date=T,strike=strike,option_type=OptionType.CALL)
             #portfolio=[BarrierOption(strike, 120,BarrierOptionType.UPANDOUT,0,T,OptionType.CALL,True,10)]
             portfolio = [product]
-            metrics=[PVMetric()]
+            risk_metrics=RiskMetrics(metrics=[PVMetric()])
             # Compute analytical price (if available)
             price_analytical = product.compute_pv_bond_option_analytically(model)
             RegressionFunction=PolyomialRegression(degree=3)
 
-            sc=SimulationController(portfolio, model, metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True,[],RegressionFunction)
+            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.EULER, True,RegressionFunction)
 
             sim_results=sc.run_simulation()
             price_sim=sim_results.get_results(0,0)
@@ -82,7 +83,7 @@ if __name__ == "__main__":
     param_grid = list(cartesian_product(T_vals,S0_vals, sigma_vals, r_vals, strikes))
 
     num_paths = 100000
-    steps = 50
+    steps = 100
     
     # Simulate option prices and store in data frame.
     # Since only spot price and time to maturity are varied
@@ -166,7 +167,7 @@ if __name__ == "__main__":
     os.makedirs(out_dir, exist_ok=True)
 
     out_path = os.path.join(out_dir, "pv_european_bond_option.png")
-    plt.savefig(out_path)
+    plt.show()
     print(f"Plot saved to {out_path}")
 
 

@@ -14,18 +14,21 @@ class BarrierOptionType(Enum):
 # Barrier Option implementation
 # Supports both single barrier and double barrier options
 class BarrierOption(Product):
-    def __init__(self, 
-                 startdate                  : float, # Startdate of the contract           
-                 maturity                   : float, # Maturity of the option
-                 strike                     : float, # Strike price
-                 num_observation_timepoints : int,   # Number of observation timepoints used to check if barrier has been crossed
-                 option_type                : OptionType, # Set up type of option
-                 barrier1                   : float,      # first barrier
-                 barrier_option_type1       : Optional[BarrierOptionType], # Type of first barrier
-                 barrier2                   : Optional[float] = None,      # Second barrier (none if single barrier option)
-                 barrier_option_type2       : Optional[BarrierOptionType] = None): # Type of second barrier
+    def __init__(
+        self, 
+        startdate                  : float, # Startdate of the contract           
+        maturity                   : float, # Maturity of the option
+        strike                     : float, # Strike price
+        num_observation_timepoints : int,   # Number of observation timepoints used to check if barrier has been crossed
+        option_type                : OptionType, # Set up type of option
+        barrier1                   : float,      # first barrier
+        barrier_option_type1       : Optional[BarrierOptionType], # Type of first barrier
+        barrier2                   : Optional[float] = None,      # Second barrier (none if single barrier option)
+        barrier_option_type2       : Optional[BarrierOptionType] = None, # Type of second barrier
+        asset_id                   : str | None = None,
+    ): 
         
-        super().__init__()
+        super().__init__(asset_ids=[asset_id])
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.maturity=torch.tensor([maturity], dtype=FLOAT,device=device)
         self.product_timeline=torch.tensor([maturity], dtype=FLOAT,device=device)
@@ -44,18 +47,15 @@ class BarrierOption(Product):
         self.use_seed = 12345
         self.rng = np.random.default_rng(12345)
 
-        self.numeraire_requests={idx: AtomicRequest(AtomicRequestType.NUMERAIRE,t) for idx, t in enumerate(self.modeling_timeline)}
-        self.spot_requests={idx: AtomicRequest(AtomicRequestType.SPOT) for idx in range(len(self.modeling_timeline))}
-
-    def get_atomic_requests(self):
-        requests=defaultdict(list)
-        for t, req in self.numeraire_requests.items():
-            requests[t].append(req)
-
-        for t, req in self.spot_requests.items():
-            requests[t].append(req)
-
-        return requests
+        self.numeraire_requests={
+            idx: AtomicRequest(AtomicRequestType.NUMERAIRE,t) 
+            for idx, t in enumerate(self.modeling_timeline)
+            }
+        asset_id = self.get_asset_id()
+        self.spot_requests={
+            (idx, asset_id): AtomicRequest(AtomicRequestType.SPOT) 
+            for idx in range(len(self.modeling_timeline))
+            }
     
     def set_use_brownian_bridge(self):
         self.use_brownian_bridge = True
@@ -235,7 +235,17 @@ class BarrierOption(Product):
 
     
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None, state=None):
-        spots=torch.stack([resolved_requests[0][self.spot_requests[idx].handle] for idx in range(len(self.modeling_timeline))], dim=1)
+        spots: list[torch.Tensor] = []
+        for idx in range(len(self.modeling_timeline)):
+            spots.append(
+                self.get_resolved_atomic_request(
+                    resolved_atomic_requests=resolved_requests[0],
+                    request_type=AtomicRequestType.SPOT,
+                    time_idx=idx,
+                    asset_id=self.get_asset_id(),
+                )
+            )
+        spots=torch.stack(spots, dim=1)
         cfs = self.payoff(spots,model)
 
         numeraire=resolved_requests[0][self.numeraire_requests[len(self.product_timeline)-1].handle]

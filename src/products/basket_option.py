@@ -1,24 +1,30 @@
 from products.product import *
 from request_interface.request_interface import AtomicRequestType, AtomicRequest
 from collections import defaultdict
+from typing import Tuple
 
 class BasketOptionType(Enum):
     ARITHMETIC=0
     GEOMETRIC=1
-
-# Implementation of Basket Option
-# Provides both arithmetic and geometric payoff at maturity
-# using constum defined weights for assets in basket
+    
 class BasketOption(Product):
-    def __init__(self,
-                 maturity               : float,
-                 weights                : Union[Sequence[float], NDArray],
-                 strike                 : float,
-                 option_type            : OptionType,
-                 basket_option_type     : Optional[BasketOptionType]=BasketOptionType.ARITHMETIC, 
-                 use_variation_reduction: Optional[bool]=False):
+    """Implementation of Basket Option.
+    
+    Provides both arithmetic and geometric payoff at maturity
+    using constum defined weights for assets in basket
+    """
+    def __init__(
+        self,
+        maturity               : float,
+        asset_ids              : list[str],
+        weights                : Union[Sequence[float], NDArray],
+        strike                 : float,
+        option_type            : OptionType,
+        basket_option_type     : BasketOptionType = BasketOptionType.ARITHMETIC, 
+        use_variation_reduction: bool = False
+    ):
         
-        super().__init__()
+        super().__init__(asset_ids=asset_ids)
         self.maturity = torch.tensor([maturity], dtype=FLOAT,device=device)
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.weights=torch.tensor(weights, dtype=FLOAT,device=device)
@@ -29,18 +35,13 @@ class BasketOption(Product):
         self.basket_option_type=basket_option_type
         self.use_variation_reduction=use_variation_reduction
 
-        self.numeraire_requests={0: AtomicRequest(AtomicRequestType.NUMERAIRE,maturity)}
-        self.spot_requests={0: AtomicRequest(AtomicRequestType.SPOT)}
-    
-    def get_atomic_requests(self):
-        requests=defaultdict(list)
-        for t, req in self.numeraire_requests.items():
-            requests[t].append(req)
-
-        for t, req in self.spot_requests.items():
-            requests[t].append(req)
-
-        return requests
+        self.numeraire_requests={
+            0: AtomicRequest(AtomicRequestType.NUMERAIRE,maturity)
+        }
+        self.spot_requests={
+            (0, asset_id): AtomicRequest(AtomicRequestType.SPOT)
+            for asset_id in asset_ids
+        }
     
     def payoff(self, spots, model):
         if self.use_variation_reduction:
@@ -72,11 +73,29 @@ class BasketOption(Product):
         correction_term=self.compute_pv_analytically(model)
 
         return payoff_classical-payoff_reduction+correction_term
+    
+    def _get_spots_for_basket(self, resolved_requests: list[dict[Tuple[int, str], torch.Tensor]], time_idx: int) -> torch.Tensor:
+        spots = []
+        for asset_id in self.asset_ids:
+            spot = self.get_resolved_atomic_request(
+                resolved_atomic_requests=resolved_requests[0],
+                request_type=AtomicRequestType.SPOT,
+                time_idx=time_idx,
+                asset_id=asset_id
+            )
+            spots.append(spot)
+
+        result = torch.stack(spots, dim=1)
+        return result
         
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None, state=None):
-        spots = resolved_requests[0][self.spot_requests[time_idx].handle]
+        spots = self._get_spots_for_basket(resolved_requests,time_idx)
         cfs = self.payoff(spots, model)
-        numeraire = resolved_requests[0][self.numeraire_requests[time_idx].handle]
+        numeraire = self.get_resolved_atomic_request(
+            resolved_atomic_requests=resolved_requests[0],
+            request_type=AtomicRequestType.NUMERAIRE,
+            time_idx=time_idx,
+        )
         normalized_cfs = cfs / numeraire
         return state, normalized_cfs.unsqueeze(1)
 
@@ -97,7 +116,7 @@ class BasketOption(Product):
         F_S_bar = torch.exp(log_S_bar)
 
         # Compute covariance Covariance matrix
-        cov_matrix = model.compute_cov_matrix(T)  
+        cov_matrix = model._get_covariance_matrix(T)  
 
         # Compute basket variance
         basket_variance = torch.dot(w, torch.mv(cov_matrix, w))

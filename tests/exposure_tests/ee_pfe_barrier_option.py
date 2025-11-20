@@ -7,6 +7,7 @@ from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
+from metrics.risk_metrics import RiskMetrics
 from products.barrier_option import BarrierOption, BarrierOptionType, OptionType
 from engine.engine import SimulationScheme
 
@@ -22,13 +23,15 @@ if __name__ == "__main__":
     strike = 100.0
 
 
-    product = BarrierOption(startdate=0.0,
-                            maturity=2.0,
-                            strike=strike,
-                            num_observation_timepoints=10,
-                            option_type=OptionType.CALL,
-                            barrier1=130,
-                            barrier_option_type1=BarrierOptionType.UPANDOUT)
+    product = BarrierOption(
+        startdate=0.0,
+        maturity=2.0,
+        strike=strike,
+        num_observation_timepoints=10,
+        option_type=OptionType.CALL,
+        barrier1=130,
+        barrier_option_type1=BarrierOptionType.UPANDOUT
+    )
     product.set_use_brownian_bridge()
 
     portfolio=[product]
@@ -39,11 +42,21 @@ if __name__ == "__main__":
     pfe_metric = PFEMetric(0.975)
 
     metrics=[ee_metric, pfe_metric]
+    risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
 
     num_paths_mainsim=10000
     num_paths_presim=100000
     num_steps=1
-    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.ANALYTICAL, False, exposure_timeline)
+    sc = SimulationController(
+        portfolio=portfolio, 
+        model=model, 
+        risk_metrics=risk_metrics, 
+        num_paths_mainsim=num_paths_mainsim, 
+        num_paths_presim=num_paths_presim, 
+        num_steps=num_steps, 
+        simulation_scheme=SimulationScheme.ANALYTICAL, 
+        differentiate=False,
+    )
 
     sim_results=sc.run_simulation()
 

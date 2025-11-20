@@ -1,19 +1,27 @@
 from common.packages import *
+from common.enums import SimulationScheme
 import numpy as np
 from typing import Union, List, Optional, Sequence
-from engine.engine import MonteCarloEngine, SimulationScheme
-from request_interface.request_interface import RequestInterface, AtomicRequest, AtomicRequestType
+from engine.engine import MonteCarloEngine
+from request_interface.request_interface import RequestInterface
+from request_interface.request_types import AtomicRequest, AtomicRequestType
 from metrics.metric import MetricType, Metric
+from metrics.risk_metrics import RiskMetrics
 from models.model import Model
+from models.model_config import ModelConfig
 from products.product import Product
 from collections import defaultdict
-from maths.regression import PolyomialRegression
+from maths.regression import RegressionFunction, PolyomialRegression
 
-# Container for simulation results
-# - Contains both metric outputs and corresponding derivatives if differentiation is enabled
-# - If computation of second order derivatives are enabled these are stored as well
-# - Results are converted into numpy arrays
 class SimulationResults:
+    """
+    Container for simulation results
+    
+    - Contains both metric outputs and corresponding derivatives if differentiation is enabled
+    - If computation of second order derivatives are enabled these are stored as well
+    - Results are converted into numpy arrays
+    """
+
     def __init__(self, results, derivatives, second_derivatives):
         self.results = self._to_numpy_nested(results)
         self.derivatives = self._to_numpy_nested(derivatives)
@@ -27,52 +35,89 @@ class SimulationResults:
         else:
             return obj
 
-    # Get Metric outputs for each product and metric
     def get_results(self, prod_idx, metric_idx):
-        return self.results[prod_idx][metric_idx]
+        """Get Metric outputs for each product and metric."""
+        results = self.results[prod_idx][metric_idx]
+        simulation_results = [result[0] for result in results]
+        simulation_results = np.array(simulation_results)
+        return simulation_results
+    
+    def get_mc_error(self, prod_idx, metric_idx):
+        """Get MC errors for Metric outputs for each product and metric."""
+        results = self.results[prod_idx][metric_idx]
+        mc_errors = [result[1] for result in results]
+        mc_errors = np.array(mc_errors)
+        return mc_errors
 
-    # Get first order derivatives for each metric output
-    # For this the label 'differentiate' in the simulation 
-    # controller needs to be enabled
     def get_derivatives(self, prod_idx, metric_idx):
+        """
+        Get first order derivatives for each metric output
+        For this the label 'differentiate' in the simulation 
+        controller needs to be enabled
+        """
         return self.derivatives[prod_idx][metric_idx]
     
-    # Get second order derivatives for each metric output
-    # For this the label 'requires_higher_order_derivatives'
-    # in the simulation controller needs to be enables
     def get_second_derivatives(self, prod_idx, metric_idx):
+        """
+        Get second order derivatives for each metric output
+        For this the label 'requires_higher_order_derivatives'
+        in the simulation controller needs to be enables
+        """
         return self.second_derivatives[prod_idx][metric_idx]
 
-# Simulation Controller to perform Monte Carlo simulation
-# and compute metric outputs for each product in a portfolio
 class SimulationController:
-    def __init__(self, 
-                 portfolio           : Sequence[Product],      # Portfolio containing all products to be evaluated
-                 model               : Model,                  # Model used to simulate paths
-                 metrics             : Sequence[Metric],       # Collection of metrics used to compute outputs
-                 num_paths_mainsim   : int,                    # Number of Monte Carlo paths used for main simulation
-                 num_paths_presim    : int,                    # Number of Monte Carlo paths used for pre simulation
-                 num_steps           : int,                    # Number of time steps used for path simulation
-                 simulation_scheme   : SimulationScheme,       # Set Simulation Scheme: Schemes currently provided: Analytical, Euler, Milstein
-                 differentiate       : bool = False,           # Turn differentiation on or off
-                 exposure_timeline   : Union[List[float], np.ndarray, None] = None,     # Set timeline for exposure simulation
-                 regression_function: Optional[PolyomialRegression] = None):  # Set regression function used for LSM algorithm
+    """
+    Simulation Controller to perform Monte Carlo simulation
+    and compute metric outputs for each product in a portfolio
+    """
+    def __init__(
+        self, 
+        portfolio           : Sequence[Product],      # Portfolio containing all products to be evaluated
+        model               : Model,                  # Model used to simulate paths
+        risk_metrics        : RiskMetrics,            # Collection of metrics used to compute outputs
+        num_paths_mainsim   : int,                    # Number of Monte Carlo paths used for main simulation
+        num_paths_presim    : int,                    # Number of Monte Carlo paths used for pre simulation
+        num_steps           : int,                    # Number of time steps used for path simulation
+        simulation_scheme   : SimulationScheme,       # Set Simulation Scheme: Schemes currently provided: Analytical, Euler, Milstein
+        differentiate       : bool = False,           # Turn differentiation on or off
+        regression_function : RegressionFunction = PolyomialRegression(degree=2)
+    ):  
+        self.risk_metrics = risk_metrics
         
-        if exposure_timeline is None:
-            exposure_timeline = []
-        
-        if regression_function is None:
-            regression_function = PolyomialRegression(degree=2)
+        # Set up requests for each exposure timepoint
+        self.numeraire_requests: dict[tuple[int, str], AtomicRequest] = {
+            (idx, "numeraire"): AtomicRequest(AtomicRequestType.NUMERAIRE, time1=t.item())
+            for idx, t in enumerate(risk_metrics.exposure_timeline)
+        }
+
+        self.spot_requests: dict[tuple[int, str], AtomicRequest] = {
+            (t_idx, asset_id): AtomicRequest(AtomicRequestType.SPOT)
+            for prod in portfolio
+            for asset_id in prod.asset_ids
+            for t_idx in range(len(risk_metrics.exposure_timeline))
+        }
+
+        # If CVA is requested, ensure ModelConfig has a credit model and add requests to compute 
+        # intermediate probabilities in terms of numeraire requests
+        self.survival_prob_requests: dict[tuple[int, str], AtomicRequest] = {}
+        self.cond_survival_prob_requests: dict[tuple[int, str], AtomicRequest] = {}
+        if risk_metrics.any_xva:
+            if not isinstance(model, ModelConfig):
+                raise Exception("ModelConfig needs to be provided for xVA valuation.")
+
+            counterparty_ids = risk_metrics.counterparty_ids
+            if not all(
+                counterparty in model.id_to_model for counterparty in counterparty_ids
+            ):
+                raise Exception("Not all models set for xVA valuation.")
 
         self.portfolio = portfolio
         self.model = model
-        self.metrics = metrics
         self.num_paths_presim = num_paths_presim
         self.num_paths_mainsim = num_paths_mainsim
         self.num_steps = num_steps
         self.simulation_scheme = simulation_scheme
         self.differentiate = differentiate
-        self.exposure_timeline = torch.tensor(exposure_timeline, dtype=FLOAT, device=device)
         self.regression_function=regression_function
         self.requires_higher_order_derivatives=False
 
@@ -93,7 +138,7 @@ class SimulationController:
         self.regression_coeffs = []
 
         degree = self.regression_function.get_degree()
-        num_time_points = len(self.exposure_timeline)
+        num_time_points = len(self.risk_metrics.exposure_timeline)
 
         for prod in portfolio:
             prod._allocate_regression_coeffs(self.regression_function)
@@ -106,50 +151,54 @@ class SimulationController:
             )
             self.regression_coeffs.append(coeffs_tensor)
 
-        # Set up requests for each exposure timepoint 
-        self.numeraire_requests = {idx: AtomicRequest(AtomicRequestType.NUMERAIRE, t) for idx, t in enumerate(exposure_timeline)}
-        self.spot_requests = {idx: AtomicRequest(AtomicRequestType.SPOT) for idx in range(len(exposure_timeline))}
-
         # Collect timelines of each product and unify with exposure timeline
         # Remove duplicates and sort timeline
         # Store as common simulation timellne
         prod_times = {float(t.item()) for prod in self.portfolio for t in prod.modeling_timeline}
-        exposure_times = {t for t in exposure_timeline}
+        exposure_times = {t.item() for t in self.risk_metrics.exposure_timeline}
         all_times = sorted(prod_times.union(exposure_times))
         self.simulation_timeline = torch.tensor(all_times, dtype=FLOAT, device=device)
 
         # Decide whether regression is required
         # If no product in the portfolio needs to be constructed and
         # no exposure metric needs to be evaluated, the regression step in the preprocessing phase can be skipped
-        self.requires_regression = any(len(prod.regression_timeline) > 0 for prod in self.portfolio) or len(exposure_timeline) > 0
+        self.requires_regression = any(
+            len(prod.regression_timeline) > 0 
+            for prod in self.portfolio) or len(self.risk_metrics.exposure_timeline
+        ) > 0
 
-    # Collect and return all requests for exposure computation 
-    def _get_requests(self):
-        requests=defaultdict(set)
-        for t, req in self.numeraire_requests.items():
-            requests[t].add(req)
-
-        for t, req in self.spot_requests.items():
-            requests[t].add(req)
+    def _get_requests(self) -> dict[tuple[int, str], set[AtomicRequest]]:
+        """Collect and return all requests for exposure computation."""
+        requests: dict[tuple[int, str], set[AtomicRequest]] = defaultdict(set)
+        for label, req in self.numeraire_requests.items():
+            requests[label].add(req)
+            
+        for label, req in self.spot_requests.items():
+            requests[label].add(req)
+            
+        for metric in self.risk_metrics.metrics:
+            for label, reqs in metric.get_requests().items():
+                for req in reqs:
+                    requests[label].add(req)
 
         return requests
     
-    # Enable computation of second order derivatives
     def compute_higher_derivatives(self):
+        """Enable computation of second order derivatives."""
         self.requires_higher_order_derivatives=True
 
-    # Perfrom preprocessing
-    # - Collect and Index requests for each product and exposure timepoint
-    # - Perform rergression of products need to be built or exposure metrics need to be computated otherwise skip
     def perform_prepocessing(self, products : Sequence[Product], request_interface : RequestInterface):
+        """Perfrom preprocessing.
         
-        request_interface.collect_and_index_requests(self.portfolio,self.simulation_timeline, self._get_requests(), self.exposure_timeline)
+        Collect and Index requests for each product and exposure timepoint
+        Perform rergression of products need to be built or exposure metrics need to be computated otherwise skip
+        """
+        request_interface.collect_and_index_requests(self.portfolio,self.simulation_timeline, self._get_requests(), self.risk_metrics.exposure_timeline)
         if self.requires_regression:
             self._perform_regression(products, request_interface)
 
-    # Perform regression of each constructible product and expsoure timepoint
     def _perform_regression(self, products : Sequence[Product], request_interface : RequestInterface):
-
+        """Perform regression of each constructible product and expsoure timepoint."""
         # Set up Monte Carlo engine to simulate paths for pre-simulation
         engine = MonteCarloEngine(
             simulation_timeline=self.simulation_timeline,
@@ -169,11 +218,13 @@ class SimulationController:
         # Perform regression for each product
         for prod in products:
             self._perform_regression_for_product(prod, resolved_requests)
-
-    # Perform regression for a specific product via Dynamic Porgramming using the LSM algorithm
+            
     def _perform_regression_for_product(self, product : Product, resolved_requests : List[dict]):
+        """
+        Perform regression for a specific product via Dynamic Porgramming using the LSM algorithm
+        """
 
-        regression_timeline = set(product.regression_timeline.tolist()).union(self.exposure_timeline.tolist())
+        regression_timeline = set(product.regression_timeline.tolist()).union(self.risk_metrics.exposure_timeline.tolist())
         regression_timeline = torch.tensor(sorted(regression_timeline), dtype=FLOAT, device=device)
 
         product_timeline = product.product_timeline
@@ -235,11 +286,11 @@ class SimulationController:
             if t_reg in product_regression_timeline:
                 i_t = product_timeline.tolist().index(t_reg)
                 numeraire = resolved_requests[0][product.numeraire_requests[i_t].handle]
-                explanatory = resolved_requests[0][product.spot_requests[i_t].handle]
+                explanatory = resolved_requests[0][product.spot_requests[(i_t, product.asset_ids[0])].handle]
             else:
-                i_t = self.exposure_timeline.tolist().index(t_reg)
-                numeraire = resolved_requests[0][self.numeraire_requests[i_t].handle]
-                explanatory = resolved_requests[0][self.spot_requests[i_t].handle]
+                i_t = self.risk_metrics.exposure_timeline.tolist().index(t_reg)
+                numeraire = resolved_requests[0][self.numeraire_requests[(i_t, "numeraire")].handle]
+                explanatory = resolved_requests[0][self.spot_requests[(i_t, product.asset_ids[0])].handle]
 
             normalized_cfs = numeraire.unsqueeze(1) * total_cfs
 
@@ -254,8 +305,8 @@ class SimulationController:
                 product_reg_idx = torch.searchsorted(product_regression_timeline, t_reg).item()
                 product.regression_coeffs[product_reg_idx, :, :] = coeffs_mat                
 
-            if t_reg in self.exposure_timeline:
-                exp_reg_idx = torch.searchsorted(self.exposure_timeline, t_reg).item()
+            if t_reg in self.risk_metrics.exposure_timeline:
+                exp_reg_idx = torch.searchsorted(self.risk_metrics.exposure_timeline, t_reg).item()
                 self.regression_coeffs[product.product_id][exp_reg_idx, :, :] = coeffs_mat
 
     def _evaluate_product(self, product: Product, resolved_requests: List[dict]):
@@ -267,10 +318,8 @@ class SimulationController:
         t_start = 0
         cfs = torch.zeros(num_paths, dtype=FLOAT, device=device)
 
-        any_pv = any(m.metric_type == MetricType.PV for m in self.metrics)
-
         # Case 1: no exposure timeline, only PV
-        if len(self.exposure_timeline) == 0 and any_pv:
+        if len(self.risk_metrics.exposure_timeline) == 0 and self.risk_metrics.any_pv:
             while t_start < len(product.product_timeline):
                 state_transition_matrix, new_cfs = product.compute_normalized_cashflows(
                     t_start,
@@ -284,7 +333,7 @@ class SimulationController:
 
         else:
             # Case 2: exposures and maybe PV
-            for i, t in enumerate(self.exposure_timeline):
+            for i, t in enumerate(self.risk_metrics.exposure_timeline):
 
                 # advance product's realized state forward until exposure time point is reached
                 while t_start < len(product.product_timeline) and product.product_timeline[t_start] <= t:
@@ -299,7 +348,7 @@ class SimulationController:
                     t_start += 1
 
                 prod_state = state_transition_matrix[:, 0]
-                explanatory = resolved_requests[0][self.spot_requests[i].handle]
+                explanatory = resolved_requests[0][self.spot_requests[(i, product.asset_ids[0])].handle]
                 A = self.regression_function.get_regression_matrix(explanatory)
 
                 # Grab the regression coeffs for THIS product at exposure time i.
@@ -310,12 +359,12 @@ class SimulationController:
 
                 continuation = (A * coeffs_matrix).sum(dim=1)                         
 
-                numeraire = resolved_requests[0][self.numeraire_requests[i].handle]   
+                numeraire = resolved_requests[0][self.numeraire_requests[(i, "numeraire")].handle]   
                 exposure = continuation / numeraire                                   
 
                 exposures.append(exposure)
 
-                if any_pv:
+                if self.risk_metrics.any_pv:
                     while t_start < len(product.product_timeline):
                         state_transition_matrix, new_cfs = product.compute_normalized_cashflows(
                             t_start,
@@ -327,16 +376,14 @@ class SimulationController:
                         cfs += new_cfs[:, 0]
                         t_start += 1
 
-        results = []
-        for metric in self.metrics:
-            eval_val = metric.evaluate(exposures, cfs)
-            results.append(eval_val)
+        return self.risk_metrics.evaluate(
+            exposures=exposures, 
+            cfs=cfs,
+            resolved_requests=resolved_requests,
+        )
 
-        return results
-
-
-    # Compute metric outputs in main simulation phase
-    def evaluate_products(self, resolved_requests : List[dict]):
+    def evaluate_products(self, resolved_requests : List[dict]) -> SimulationResults:
+        """Compute metric outputs in main simulation phase."""
         results=[]
         for product in self.portfolio:
             result=self._evaluate_product(product,resolved_requests)
@@ -368,7 +415,7 @@ class SimulationController:
                 grads_per_metric = []
                 for metric in prod:
                     grads_per_eval = []
-                    for eval in metric:
+                    for eval,_ in metric:
                         _grads = torch.autograd.grad(
                             eval,
                             model_params,
@@ -403,9 +450,8 @@ class SimulationController:
 
         return SimulationResults(results, grads, higher_grads)
 
-    # Perform entire simulation to simulate metric outputs
-    def run_simulation(self):
-
+    def run_simulation(self) -> SimulationResults:
+        """Perform entire simulation to simulate metric outputs."""
         # Instatiate request interface to index, collect and solve requests by the model
         request_interface = RequestInterface(self.model)
 

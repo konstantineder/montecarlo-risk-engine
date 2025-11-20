@@ -1,5 +1,7 @@
 from common.packages import *
 from enum import Enum
+from request_interface.request_types import AtomicRequest
+from collections import defaultdict
 
 # Enum for metric types 
 class MetricType(Enum):
@@ -11,8 +13,8 @@ class MetricType(Enum):
     EEPE = 5
     CVA = 6
 
-# Base metric class to be overwritten by all spectific metric implementations
 class Metric:
+    """Base metric class to be overwritten by all spectific metric implementations."""
     class EvaluationType(Enum):
          ANALYTICAL=0
          NUMERICAL=1
@@ -20,18 +22,37 @@ class Metric:
     def __init__(self, metric_type, evaluation_type):
         self.metric_type=metric_type
         self.evaluation_type=evaluation_type
-        self.regression_coeffs=[]
+        
+    def _compute_mc_mean_and_error(self, values: torch.Tensor):
+        """
+        values: tensor [num_paths]
+        Returns: (mean, mc_error)
+        """
+        num_paths = values.shape[0]
+        mean = values.mean()
+        sigma = values.std(unbiased=True)
+        mc_error = sigma / torch.sqrt(torch.tensor(num_paths, dtype=FLOAT, device=device))
+        return mean, mc_error
+        
+    def set_requests(self, exposure_timeline: torch.Tensor) -> None:
+        pass
+    
+    def get_requests(self) -> dict[tuple[int, str], list[AtomicRequest]]:
+        requests: dict[tuple[int, str], list[AtomicRequest]] = defaultdict(list)
+        return requests
+    
+    def get_counterparty_ids(self) -> list[str] | None:
+        return None
 
-    def evaluate_analytically(self, *args, **kwargs):
+    def evaluate_analytically(self, **kwargs):
         raise NotImplementedError("Analytical evaluation not implemented.")
     
-    def evaluate_numerically(self, *args, **kwargs):
+    def evaluate_numerically(self, **kwargs):
         raise NotImplementedError("Numerical evluation not implemented.")
 
-
-    def evaluate(self,exposures,cfs):
+    def evaluate(self,**kwargs):
         if self.evaluation_type==Metric.EvaluationType.NUMERICAL:
-            return self.evaluate_numerically(exposures,cfs)
+            return self.evaluate_numerically(**kwargs)
         else:
-            return self.evaluate_analytically(exposures,cfs)
+            return self.evaluate_analytically(**kwargs)
         

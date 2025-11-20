@@ -9,8 +9,10 @@ from itertools import product as cartesian_product
 from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
-from products.european_option_equity import EuropeanOption, OptionType
-from engine.engine import SimulationScheme
+from metrics.risk_metrics import RiskMetrics
+from products.european_option import EuropeanOption, OptionType
+from common.enums import SimulationScheme
+from products.equity import Equity
 
 
 if __name__ == "__main__":
@@ -65,12 +67,14 @@ if __name__ == "__main__":
         for T, S0, sigma, rate, strike in param_grid:
             model = BlackScholesModel(0, S0, rate, sigma)
             #product = BinaryOption(T,strike,10,OptionType.CALL)
-            product = EuropeanOption(T,strike,OptionType.CALL)
+            underlying = Equity()
+            product = EuropeanOption(underlying, T,strike,OptionType.CALL)
             #portfolio=[BarrierOption(strike, 120,BarrierOptionType.UPANDOUT,0,T,OptionType.CALL,True,10)]
             portfolio = [product]
             metrics=[PVMetric()]
+            risk_metrics=RiskMetrics(metrics=metrics)
             vomma_analytic=product.compute_dVegadSigma_analytically(model)
-            sc=SimulationController(portfolio, model, metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
+            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
             sc.compute_higher_derivatives()
             sim_results=sc.run_simulation()
             super_greeks=sim_results.get_second_derivatives(0,0)[0]
@@ -109,7 +113,8 @@ if __name__ == "__main__":
         spot, rate, vola = args
         model_deriv = BlackScholesModel(0, spot, rate, vola)
         #product_deriv = BarrierOption(100, 120,BarrierOptionType.UPANDOUT,0.0,2.0,OptionType.CALL,True,10)
-        product_deriv = EuropeanOption(2.0,100,OptionType.CALL)
+        underlying = Equity()
+        product_deriv = EuropeanOption(underlying,2.0,100,OptionType.CALL)
         #product_deriv=BinaryOption(2.0,100,10,OptionType.CALL)
         
         return float(product_deriv.compute_pv_analytically(model_deriv))

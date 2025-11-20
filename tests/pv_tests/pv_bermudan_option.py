@@ -8,9 +8,10 @@ from itertools import product as cartesian_product
 from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
+from metrics.risk_metrics import RiskMetrics
 from products.bermudan_option import AmericanOption, OptionType
 from products.equity import Equity
-from engine.engine import SimulationScheme
+from common.enums import SimulationScheme
 
 
 if __name__ == "__main__":
@@ -45,10 +46,10 @@ if __name__ == "__main__":
             product = AmericanOption(underlying,T,10,strike,OptionType.PUT)
 
             portfolio = [product]
-            metrics=[PVMetric()]
+            risk_metrics=RiskMetrics(metrics=[PVMetric()])
             # Compute analytical price (if available)
 
-            sc=SimulationController(portfolio, model, metrics, num_paths_main_sim, num_paths_pre_sim, steps, SimulationScheme.ANALYTICAL, True)
+            sc=SimulationController(portfolio, model, risk_metrics, num_paths_main_sim, num_paths_pre_sim, steps, SimulationScheme.ANALYTICAL, True)
 
             sim_results=sc.run_simulation()
             price_sim=sim_results.get_results(0,0)
@@ -95,10 +96,10 @@ if __name__ == "__main__":
         product_deriv = AmericanOption(underlying,1.0,10,100,OptionType.PUT)
 
         portfolio = [product_deriv]
-        metrics=[PVMetric()]
-        # Compute analytical price (if available)
+        risk_metrics=RiskMetrics(metrics=[PVMetric()])
 
-        sc=SimulationController(portfolio, model_deriv, metrics, num_paths_main_sim, num_paths_pre_sim, steps, SimulationScheme.ANALYTICAL, True)
+
+        sc=SimulationController(portfolio, model_deriv, risk_metrics, num_paths_main_sim, num_paths_pre_sim, steps, SimulationScheme.ANALYTICAL, True)
 
         sim_results=sc.run_simulation()
         pv=sim_results.get_results(0,0)[0]
@@ -170,7 +171,7 @@ if __name__ == "__main__":
     os.makedirs(out_dir, exist_ok=True)
 
     out_path = os.path.join(out_dir, "pv_bermudan_option.png")
-    plt.savefig(out_path)
+    plt.show()
     print(f"Plot saved to {out_path}")
 
 
