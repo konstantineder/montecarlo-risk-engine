@@ -178,7 +178,7 @@ These notebooks serve both as **tutorials** and as **technical deep dives**, and
 
 ## Installation & Quick Start
 
-You can run **MCEngine** either:
+You can run **montecarlo-risk-engine** either:
 
 - directly on your machine using Python, or  
 - inside a **Docker container** (recommended for zero-configuration setup)
@@ -188,8 +188,8 @@ You can run **MCEngine** either:
 ### 🔧 Option 1 — Local Installation (Python)
 
 ```bash
-git clone https://github.com/konstantineder/MCEngine.git
-cd MCEngine
+git clone https://github.com/konstantineder/montecarlo-risk-engine.git
+cd montecarlo-risk-engine
 python3.12 -m venv .venv
 source .venv/bin/activate          # macOS/Linux
 # or:
