@@ -10,6 +10,7 @@ from products.bermudan_option import AmericanOption, OptionType
 from products.equity import Equity 
 from engine.engine import SimulationScheme
 
+threshold = 1e-8
 
 def test_american_option_pv():
     """Test the PV calculation of an American option."""
@@ -56,5 +57,5 @@ def test_american_option_pv():
 
     pv=sim_results.get_results(0,0)[0]
     
-    assert pv == 34.323036543142706  # Expected PV value
+    assert abs(pv - 34.323036543142706) < threshold  # Expected PV value
     
