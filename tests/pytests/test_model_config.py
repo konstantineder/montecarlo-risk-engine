@@ -9,6 +9,7 @@ from controller.controller import SimulationController
 from models.model_config import ModelConfig
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
+from metrics.risk_metrics import RiskMetrics
 from products.basket_option import BasketOption, OptionType,BasketOptionType
 from engine.engine import SimulationScheme
 
@@ -38,6 +39,7 @@ def test_basket_option_analytically():
     portfolio=[basket,basket_geo]
 
     metrics = [PVMetric()]
+    risk_metrics=RiskMetrics(metrics=metrics)
 
     num_paths = 1000000
     steps = 1
@@ -45,7 +47,7 @@ def test_basket_option_analytically():
     sc=SimulationController(
         portfolio=portfolio, 
         model=model, 
-        metrics=metrics, 
+        risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths, 
         num_paths_presim=0, 
         num_steps=steps, 
@@ -86,6 +88,7 @@ def test_basket_option_euler():
     portfolio=[basket,basket_geo]
 
     metrics = [PVMetric()]
+    risk_metrics=RiskMetrics(metrics=metrics)
 
     num_paths = 1000000
     steps = 50
@@ -93,7 +96,7 @@ def test_basket_option_euler():
     sc=SimulationController(
         portfolio=portfolio, 
         model=model, 
-        metrics=metrics, 
+        risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths, 
         num_paths_presim=0, 
         num_steps=steps, 

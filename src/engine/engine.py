@@ -86,7 +86,7 @@ class MonteCarloEngine:
                         corr_randn=corr_randn
                     )
                     t_prev += dt
-            paths.append(state)
+            paths.append(state.clone())
 
         return torch.stack(paths, dim=1)
 

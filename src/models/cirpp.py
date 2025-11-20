@@ -156,7 +156,8 @@ class CIRPPModel(Model):
         log_B = state[:,1:2]
         sqrt_y = torch.sqrt(torch.clamp(y, min=0.0))
         y_next = y + kappa * (theta - y) * delta_t + sigma * sqrt_y * torch.sqrt(delta_t) * corr_randn
-        log_B_next = log_B + self.lambda_t(time1, y) * delta_t
+        lam = self.lambda_t(time1, y)
+        log_B_next = log_B + lam * delta_t
         return torch.stack([torch.clamp(y_next, min=1e-12).squeeze(-1), log_B_next.squeeze(-1)], dim=-1)
 
     def simulate_time_step_analytically(
@@ -264,7 +265,7 @@ class CIRPPModel(Model):
         
         if req.request_type == AtomicRequestType.SURVIVAL_PROBABILITY:
             log_B_t=state[:,1]
-            return torch.exp(log_B_t) 
+            return torch.exp(-log_B_t) 
 
         else:
             raise NotImplementedError(f"Request type {req.request_type} not supported by CIRpp.")

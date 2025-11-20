@@ -36,7 +36,7 @@ class BlackScholesModel(Model):
         return torch.stack([self.model_params[2]])
     
     def get_state(self, num_paths: int):
-        return self.get_spot().expand(num_paths).clone()
+        return self.get_spot().expand(num_paths).unsqueeze(-1).clone()
     
     def _get_covariance_matrix(self, delta_t: torch.Tensor) -> torch.Tensor:
         """Compute covariance matrix for time delta."""
@@ -56,8 +56,8 @@ class BlackScholesModel(Model):
         randn:  same shape as state (noise already correlated)
         """
         delta_t = time2 - time1
-        rate = self.get_rate()
-        sigma = self.get_volatility()
+        rate = self.get_rate().squeeze(-1)
+        sigma = self.get_volatility().squeeze(-1)
         
         drift = rate * delta_t
         diffusion = corr_randn - 0.5 * delta_t * sigma**2
@@ -74,8 +74,8 @@ class BlackScholesModel(Model):
         Euler–Maruyama step for BS multi asset model.
         """
         delta_t = time2 -time1
-        rate = self.get_rate()
-        sigma = self.get_volatility()
+        rate = self.get_rate().squeeze(-1)
+        sigma = self.get_volatility().squeeze(-1)
         
         dS = rate * state * delta_t + sigma * state * torch.sqrt(delta_t) * corr_randn
         state = state + dS
@@ -85,7 +85,7 @@ class BlackScholesModel(Model):
         """Resolve requests posed by all products and at each exposure timepoint."""
 
         if req.request_type == AtomicRequestType.SPOT:
-            return state
+            return state.squeeze(-1)
         elif req.request_type == AtomicRequestType.DISCOUNT_FACTOR:
             t = req.time1
             rate=self.get_rate()

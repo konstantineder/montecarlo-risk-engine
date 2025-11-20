@@ -25,6 +25,8 @@ class Bond(Product):
         self.maturity = torch.tensor([maturity], dtype=FLOAT,device=device)
         self.notional = torch.tensor([notional], dtype=FLOAT, device=device)
         self.tenor = torch.tensor([tenor], dtype=FLOAT, device=device)
+        if fixed_rate is not None:
+            fixed_rate = torch.tensor([fixed_rate], dtype=FLOAT, device=device)    
         self.fixed_rate = fixed_rate
         self.pays_notional=pays_notional
         self.composite_req_handle=None
@@ -205,7 +207,7 @@ class Bond(Product):
 
         cashflow = libor_rate * dt
 
-        if self.pays_notional and time_idx == len(self.modeling_timeline):
+        if self.pays_notional and time_idx == len(self.modeling_timeline) - 1:
             cashflow+=self.notional
 
         discounted_cashflow = cashflow / numeraire

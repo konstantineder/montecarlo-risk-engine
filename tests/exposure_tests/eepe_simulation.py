@@ -8,6 +8,7 @@ from itertools import product as cartesian_product
 from controller.controller import SimulationController
 from models.black_scholes import *
 from metrics.eepe_metric import *
+from metrics.risk_metrics import RiskMetrics
 from products.european_option import EuropeanOption, OptionType
 from products.equity import Equity
 from engine.engine import SimulationScheme
@@ -48,8 +49,9 @@ if __name__ == "__main__":
             metrics=[EEPEMetric()]
 
             exposure_timeline = np.linspace(0, T,10)
+            risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
 
-            sc=SimulationController(portfolio, model, metrics, num_paths, 1000, steps, SimulationScheme.ANALYTICAL, True, exposure_timeline)
+            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 1000, steps, SimulationScheme.ANALYTICAL, True)
 
             sim_results=sc.run_simulation()
             price_sim=sim_results.get_results(0,0)[0]
@@ -96,10 +98,12 @@ if __name__ == "__main__":
 
         portfolio = [product_deriv]
         metrics=[EEPEMetric()]
-        # Compute analytical price (if available)
+        
         exposure_timeline = np.linspace(0.0, 2.0,10)
+        risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
+    
 
-        sc=SimulationController(portfolio, model_deriv, metrics, num_paths, 1000, steps, SimulationScheme.ANALYTICAL, False, exposure_timeline)
+        sc=SimulationController(portfolio, model_deriv, risk_metrics, num_paths, 1000, steps, SimulationScheme.ANALYTICAL, False)
         sim_results=sc.run_simulation()
         eepe=sim_results.get_results(0,0)[0]
         

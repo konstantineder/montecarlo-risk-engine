@@ -14,7 +14,7 @@ from models.cirpp import CIRPPModel
 from models.model_config import ModelConfig
 from metrics.cva_metric import CVAMetric 
 from metrics.risk_metrics import RiskMetrics
-from products.bond import Bond
+from products.swap import InterestRateSwap, IRSType
 
 sys.path.append(os.path.abspath(".."))
 output_path = "tests/data/cds_data.csv"
@@ -26,7 +26,6 @@ TENOR_COL = "PX6"
 NAMES = [
     "General Motors Co",
 ]
-
 # Map column names to maturities (in years)
 TENOR_MAP = {
     "PX1": 0.5, "PX2": 1.0, "PX3": 2.0, "PX4": 3.0, "PX5": 4.0,
@@ -100,9 +99,9 @@ interest_rate_model = VasicekModel(
     calibration_date=0.,
     rate=0.03,
     mean=0.05,
-    mean_reversion_speed=1,
+    mean_reversion_speed=0.02,
     volatility=0.2,
-    asset_id="bond"
+    asset_id="irs"
 )
 counterparty_id = "General Motors Co"
 intensity_model = CIRPPModel(
@@ -116,7 +115,7 @@ intensity_model = CIRPPModel(
 )
 models = [interest_rate_model, intensity_model]
 inter_correlation_matrices: list[np.ndarray] = []
-inter_correlation_matrix = np.array([0])
+inter_correlation_matrix = np.array([0.])
 inter_correlation_matrices.append(inter_correlation_matrix)
 
 model_config = ModelConfig(
@@ -124,46 +123,35 @@ model_config = ModelConfig(
     inter_asset_correlation_matrix=inter_correlation_matrix,
 )
 
-maturity = 2.0
-zero_bond = Bond(
+maturity = 10.0
+irs = InterestRateSwap(
     startdate=0.0,
-    maturity=maturity,
-    notional=1,
-    tenor=maturity,
-    pays_notional=True, 
-    fixed_rate=0.0,
-    asset_id="bond"
+    enddate=maturity,
+    notional=1.0,
+    fixed_rate=0.03,
+    tenor_fixed=0.25,
+    tenor_float=0.25, 
+    irs_type=IRSType.PAYER,
+    asset_id="irs"
 )
-portfolio=[zero_bond]
+portfolio=[irs]
 
 # Metric timeline for EE
 exposure_timeline = np.linspace(0, maturity,100)
-cva_metric = CVAMetric(counterparty_id=counterparty_id, recovery_rate=0.4)
-risk_metrics = RiskMetrics(metrics=[cva_metric], exposure_timeline=exposure_timeline)
+cva_metric = CVAMetric(counterparty_id=counterparty_id,recovery_rate=0.4)
+
+metrics=[cva_metric]
+risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
 
 num_paths_mainsim=100000
 num_paths_presim=100000
 num_steps=10
-sc=SimulationController(
-    portfolio=portfolio, 
-    model=model_config, 
-    risk_metrics=risk_metrics, 
-    num_paths_mainsim=num_paths_mainsim, 
-    num_paths_presim=num_paths_presim, 
-    num_steps=num_steps, 
-    simulation_scheme=SimulationScheme.EULER, 
-    differentiate=False,
-)
+sc=SimulationController(portfolio, model_config, risk_metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False)
 
 sim_results=sc.run_simulation()
 
-cva_bond=sim_results.get_results(0,0)[0]
-pv_bond = interest_rate_model.compute_bond_price(0.0, maturity, 0.03)
-print("PV of bond (theoretical):", pv_bond.item())
-survival_prob = intensity_model.survival_probability(0.0, maturity, 0.0001)
-print("Survival Probability (theoretical):", survival_prob.item())
-expected_loss = (1 - recovery) * (1 - survival_prob) * pv_bond
-print("CVA from simulation:", cva_bond.item())
-print("Expected Loss (theoretical/uncorrelated):", expected_loss.item())
+cva_irs=sim_results.get_results(0,0)[0]
+
+print("CVA from simulation:", cva_irs.item())
 
 

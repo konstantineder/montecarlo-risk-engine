@@ -9,6 +9,7 @@ from controller.controller import SimulationController
 from models.vasicek import VasicekModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
+from metrics.risk_metrics import RiskMetrics
 from products.european_option import EuropeanOption, OptionType
 from products.swap import InterestRateSwap, IRSType
 
@@ -18,13 +19,32 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # Setup model and product
-    model = VasicekModel(calibration_date=0.,rate=0.03,mean=0.05,mean_reversion_speed=0.02,volatility=0.02)
+    model = VasicekModel(
+        calibration_date=0.,
+        rate=0.03,
+        mean=0.05,
+        mean_reversion_speed=0.02,
+        volatility=0.02
+    )
     exercise_dates = [3.0]
     maturity = 3.0
     strike = 100.0
 
-    underlying=InterestRateSwap(startdate=0.0,enddate=2.0, notional=1.0,fixed_rate=0.03,tenor_fixed=0.25, tenor_float=0.25,irs_type=IRSType.RECEIVER)
-    product = EuropeanOption(underlying=underlying,exercise_date=1.5,strike=0.0,option_type=OptionType.CALL)
+    underlying=InterestRateSwap(
+        startdate=0.0,
+        enddate=2.0, 
+        notional=1.0,
+        fixed_rate=0.03,
+        tenor_fixed=0.25, 
+        tenor_float=0.25,
+        irs_type=IRSType.RECEIVER
+    )
+    product = EuropeanOption(
+        underlying=underlying,
+        exercise_date=1.5,
+        strike=0.0,
+        option_type=OptionType.CALL
+    )
 
     portfolio=[product]
 
@@ -33,12 +53,25 @@ if __name__ == "__main__":
     ee_metric = EPEMetric()
     pfe_metric = PFEMetric(0.9)
 
-    metrics=[ee_metric, pfe_metric]
+    risk_metrics = RiskMetrics(
+        metrics=[ee_metric, pfe_metric],
+        exposure_timeline=exposure_timeline
+    )
 
     num_paths_mainsim=10000
     num_paths_presim=100000
     num_steps=1
-    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False, exposure_timeline)
+    
+    sc = SimulationController(
+        portfolio=portfolio, 
+        model=model, 
+        risk_metrics=risk_metrics, 
+        num_paths_mainsim=num_paths_mainsim, 
+        num_paths_presim=num_paths_presim, 
+        num_steps=num_steps, 
+        simulation_scheme=SimulationScheme.EULER, 
+        differentiate=False,
+    )
 
     sim_results=sc.run_simulation()
 

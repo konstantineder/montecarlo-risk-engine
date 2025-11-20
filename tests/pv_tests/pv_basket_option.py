@@ -9,6 +9,7 @@ from itertools import product as cartesian_product
 from controller.controller import SimulationController
 from models.black_scholes_multi import BlackScholesMulti
 from metrics.pv_metric import PVMetric
+from metrics.risk_metrics import RiskMetrics
 from products.basket_option import BasketOption, OptionType,BasketOptionType
 
 
@@ -46,9 +47,9 @@ if __name__ == "__main__":
             bo_geo = BasketOption(T,asset_ids,weights,strike,OptionType.CALL,BasketOptionType.GEOMETRIC)
 
             portfolio = [bo_artm,bo_geo]
-            metrics=[PVMetric()]
+            risk_metrics=RiskMetrics(metrics=[PVMetric()])
 
-            sc=SimulationController(portfolio, model, metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
+            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
 
             sim_results=sc.run_simulation()
             price_artm=sim_results.get_results(0,0)

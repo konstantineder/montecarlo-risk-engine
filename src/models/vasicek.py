@@ -68,19 +68,19 @@ class VasicekModel(Model):
             log_B accumulates ∫ r_s ds numerically (left Riemann) here: log_B_{t+Δ} ≈ log_B_t + r_t Δ
         """
         delta_t = time2 - time1
-        r_t = state[:, 0]
-        log_B_t = state[:, 1]
+        r_t = state[:, 0:1]
+        log_B_t = state[:, 1:2]
         a = self.get_mean_reversion_speed()
         theta = self.get_mean()
 
         # advance numeraire accumulator numerically (cheap and stable)
-        log_B_t += r_t * delta_t
+        log_B_t_next = log_B_t + r_t * delta_t
 
         exp_decay = torch.exp(-a * delta_t)
         mean = theta + (r_t - theta) * exp_decay
         r_next = mean + corr_randn
 
-        return torch.stack([r_next, log_B_t], dim=-1)
+        return torch.stack([r_next.squeeze(-1), log_B_t_next.squeeze(-1)], dim=-1)
     
     def simulate_time_step_euler(
         self,

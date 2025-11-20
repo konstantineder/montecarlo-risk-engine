@@ -38,12 +38,8 @@ class Model:
         
         dt = float(delta_t) if delta_t is not None else None
         chol = self.get_cholesky(simulation_scheme=simulation_scheme, delta_t=dt)
-        if self.simulation_dim == 1:
-            z = torch.randn(num_paths, dtype=FLOAT, device=device)
-            return z * chol[0]
-        else:
-            z = torch.randn(num_paths, self.simulation_dim, dtype=FLOAT, device=device)
-            return z @ chol.T
+        z = torch.randn(num_paths, self.simulation_dim, dtype=FLOAT, device=device)
+        return z @ chol.T
         
     def get_cholesky(self, simulation_scheme: SimulationScheme, delta_t: torch.Tensor | None) -> torch.Tensor:
         """Compute Cholesky decomposition of covariance matrix.

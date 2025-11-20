@@ -1,5 +1,7 @@
 from common.packages import *
 from enum import Enum
+from request_interface.request_types import AtomicRequest
+from collections import defaultdict
 
 # Enum for metric types 
 class MetricType(Enum):
@@ -20,6 +22,16 @@ class Metric:
     def __init__(self, metric_type, evaluation_type):
         self.metric_type=metric_type
         self.evaluation_type=evaluation_type
+        
+    def set_requests(self, exposure_timeline: torch.Tensor) -> None:
+        pass
+    
+    def get_requests(self) -> dict[tuple[int, str], list[AtomicRequest]]:
+        requests: dict[tuple[int, str], list[AtomicRequest]] = defaultdict(list)
+        return requests
+    
+    def get_counterparty_ids(self) -> list[str] | None:
+        return None
 
     def evaluate_analytically(self, **kwargs):
         raise NotImplementedError("Analytical evaluation not implemented.")

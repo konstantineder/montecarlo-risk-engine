@@ -8,6 +8,7 @@ from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
+from metrics.risk_metrics import RiskMetrics
 from products.flexicall import FlexiCall, EuropeanOption, OptionType
 from products.equity import Equity
 
@@ -25,9 +26,18 @@ if __name__ == "__main__":
     underlying=Equity('id')
     underlyings_options = []
     for idx in range(len(exercise_dates)):
-        opt = EuropeanOption(underlying=underlying, exercise_date=exercise_dates[idx], strike=strikes[idx], option_type=OptionType.CALL)
+        opt = EuropeanOption(
+            underlying=underlying, 
+            exercise_date=exercise_dates[idx], 
+            strike=strikes[idx], 
+            option_type=OptionType.CALL
+        )
         underlyings_options.append(opt)
-    product = FlexiCall(underlyings=underlyings_options, num_exercise_rights=4)
+        
+    product = FlexiCall(
+        underlyings=underlyings_options, 
+        num_exercise_rights=4,
+    )
 
     portfolio=[product]
 
@@ -36,12 +46,25 @@ if __name__ == "__main__":
     ee_metric = EPEMetric()
     pfe_metric = PFEMetric(0.9)
 
-    metrics=[ee_metric, pfe_metric]
+    risk_metrics = RiskMetrics(
+        metrics=[ee_metric, pfe_metric],
+        exposure_timeline=exposure_timeline
+    )
 
     num_paths_mainsim=10000
     num_paths_presim=100000
     num_steps=1
-    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.ANALYTICAL, False, exposure_timeline)
+    
+    sc = SimulationController(
+        portfolio=portfolio, 
+        model=model, 
+        risk_metrics=risk_metrics, 
+        num_paths_mainsim=num_paths_mainsim, 
+        num_paths_presim=num_paths_presim, 
+        num_steps=num_steps, 
+        simulation_scheme=SimulationScheme.ANALYTICAL, 
+        differentiate=False,
+    )
 
     sim_results=sc.run_simulation()
 

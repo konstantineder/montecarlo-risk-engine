@@ -7,6 +7,7 @@ from common.enums import SimulationScheme
 from controller.controller import SimulationController
 from models.black_scholes_multi import BlackScholesMulti
 from metrics.pv_metric import PVMetric
+from metrics.risk_metrics import RiskMetrics
 from products.basket_option import BasketOption, OptionType,BasketOptionType
 from engine.engine import SimulationScheme
 
@@ -37,6 +38,7 @@ def test_pv_basket_option():
     portfolio=[basket,basket_geo]
 
     metrics = [PVMetric()]
+    risk_metrics=RiskMetrics(metrics=metrics)
 
     num_paths = 1000000
     steps = 1
@@ -44,7 +46,7 @@ def test_pv_basket_option():
     sc=SimulationController(
         portfolio=portfolio, 
         model=model, 
-        metrics=metrics, 
+        risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths, 
         num_paths_presim=0, 
         num_steps=steps, 

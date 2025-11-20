@@ -20,7 +20,6 @@ class ModelConfig(Model):
         models: list[Model],
         numeraire_model_idx: int = 0,
         discount_model_idx: int = 0,
-        credit_model_idx: int | None = None,
         inter_asset_correlation_matrix: list[np.ndarray] | None = None,
     ):
         assert len(models) > 0, "Provide at least one model."
@@ -45,7 +44,6 @@ class ModelConfig(Model):
         self.id_to_model: dict[str, int | None] = {
             "numeraire": numeraire_model_idx,
             "discount": discount_model_idx,
-            "issuer": credit_model_idx,
             }
         
         for idx, model in enumerate(models):
@@ -56,7 +54,7 @@ class ModelConfig(Model):
         offset = 0
         for idx, model in enumerate(models):
             self.model_state_offset[idx] = offset
-            offset += model.num_assets
+            offset += model.state_dim
 
         # collect shapes
         shapes = [len(model.get_model_params()) for model in models]
@@ -111,9 +109,17 @@ class ModelConfig(Model):
                 num_assets2 = model2.num_assets
 
                 int_corr = self.inter_asset_correlation_matrix[idx]  
-
+                
+                # Write upper-right block
                 corr[row:row+num_assets1, col:col+num_assets2] = int_corr
-                corr[col:col+num_assets2, row:row+num_assets1] = int_corr.T  
+
+                # Write lower-left block (symmetric)
+                if int_corr.ndim >= 2:
+                    # transpose last two dims for any >=2D tensor
+                    corr[col:col+num_assets2, row:row+num_assets1] = int_corr.transpose(-1, -2)
+                else:
+                    # 0-D or 1-D: transpose is a no-op, just reuse
+                    corr[col:col+num_assets2, row:row+num_assets1] = int_corr  
 
                 col += num_assets2
 
@@ -152,8 +158,16 @@ class ModelConfig(Model):
                     delta_t=delta_t,
                 )  
 
+                # Write upper-right block
                 cov[row:row+num_assets1, col:col+num_assets2] = block
-                cov[col:col+num_assets2, row:row+num_assets1] = block.T  
+
+                # Write lower-left block (symmetric)
+                if block.ndim >= 2:
+                    # transpose last two dims for any >=2D tensor
+                    cov[col:col+num_assets2, row:row+num_assets1] = block.transpose(-1, -2)
+                else:
+                    # 0-D or 1-D: transpose is a no-op, just reuse
+                    cov[col:col+num_assets2, row:row+num_assets1] = block  
 
                 col += num_assets2
 

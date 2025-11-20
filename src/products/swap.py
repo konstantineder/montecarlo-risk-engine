@@ -34,8 +34,24 @@ class InterestRateSwap(Product):
         self.tenor_float = tenor_float
         self.irs_type = irs_type
 
-        self.fixed_leg = Bond(startdate=startdate,maturity=enddate,notional=notional,tenor=tenor_fixed,pays_notional=False,fixed_rate=fixed_rate)
-        self.floating_leg = Bond(startdate=startdate,maturity=enddate,notional=notional,pays_notional=False,tenor=tenor_float)
+        self.fixed_leg = Bond(
+            startdate=startdate,
+            maturity=enddate,
+            notional=notional,
+            tenor=tenor_fixed,
+            pays_notional=False,
+            fixed_rate=fixed_rate,
+            asset_id=asset_id,
+        )
+        
+        self.floating_leg = Bond(
+            startdate=startdate,
+            maturity=enddate,
+            notional=notional,
+            pays_notional=False,
+            tenor=tenor_float,
+            asset_id=asset_id,
+        )
 
         fixed_times = {float(t.item()) for t in self.fixed_leg.modeling_timeline}
         float_times = {float(t.item()) for t in self.floating_leg.modeling_timeline}
@@ -119,7 +135,7 @@ class InterestRateSwap(Product):
         fixed_value = self.fixed_leg.get_value(resolved_atomic_requests)
         float_value = self.floating_leg.get_value(resolved_atomic_requests)
 
-        total_value = float_value - fixed_value if self.irs_type == IRSType.RECEIVER else fixed_value - float_value
+        total_value = float_value - fixed_value if self.irs_type == IRSType.PAYER else fixed_value - float_value
 
         return  total_value
 
@@ -151,7 +167,7 @@ class InterestRateSwap(Product):
                 float_time_idx, model, resolved_requests, regression_RegressionFunction, state
             )
 
-        total_value = float_cashflow - fixed_cashflow if self.irs_type == IRSType.RECEIVER else fixed_cashflow - float_cashflow
+        total_value = float_cashflow - fixed_cashflow if self.irs_type == IRSType.PAYER else fixed_cashflow - float_cashflow
 
         return state, total_value
 

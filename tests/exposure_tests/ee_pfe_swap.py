@@ -10,6 +10,7 @@ from models.vasicek import VasicekModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
 from metrics.ene_metric import ENEMetric
+from metrics.risk_metrics import RiskMetrics
 from products.swap import InterestRateSwap, IRSType
 
 
@@ -23,8 +24,24 @@ if __name__ == "__main__":
     maturity = 3.0
     strike = 100.0
 
-    irs1 = InterestRateSwap(startdate=0.0,enddate=2.0,notional=1.0,fixed_rate=0.03,tenor_fixed=0.25,tenor_float=0.25, irs_type=IRSType.RECEIVER)
-    irs2 = InterestRateSwap(startdate=0.0,enddate=2.0,notional=1.0,fixed_rate=0.03,tenor_fixed=0.5,tenor_float=0.25, irs_type=IRSType.RECEIVER)
+    irs1 = InterestRateSwap(
+        startdate=0.0,
+        enddate=2.0,
+        notional=1.0,
+        fixed_rate=0.03,
+        tenor_fixed=0.25,
+        tenor_float=0.25, 
+        irs_type=IRSType.PAYER
+    )
+    irs2 = InterestRateSwap(
+        startdate=0.0,
+        enddate=2.0,
+        notional=1.0,
+        fixed_rate=0.03,
+        tenor_fixed=0.5,
+        tenor_float=0.25, 
+        irs_type=IRSType.PAYER
+    )
 
     portfolio=[irs1, irs2]
 
@@ -34,12 +51,25 @@ if __name__ == "__main__":
     ene_metric = ENEMetric()
     pfe_metric = PFEMetric(0.9)
 
-    metrics=[epe_metric, ene_metric, pfe_metric]
+    risk_metrics = RiskMetrics(
+        metrics=[epe_metric, ene_metric, pfe_metric],
+        exposure_timeline=exposure_timeline
+    )
 
     num_paths_mainsim=10000
     num_paths_presim=100000
     num_steps=1
-    sc=SimulationController(portfolio, model, metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False, exposure_timeline)
+    
+    sc = SimulationController(
+        portfolio=portfolio, 
+        model=model, 
+        risk_metrics=risk_metrics, 
+        num_paths_mainsim=num_paths_mainsim, 
+        num_paths_presim=num_paths_presim, 
+        num_steps=num_steps, 
+        simulation_scheme=SimulationScheme.EULER, 
+        differentiate=False,
+    )
 
     sim_results=sc.run_simulation()
 

@@ -6,6 +6,7 @@ from engine.engine import MonteCarloEngine
 from request_interface.request_interface import RequestInterface
 from request_interface.request_types import AtomicRequest, AtomicRequestType
 from metrics.metric import MetricType, Metric
+from metrics.risk_metrics import RiskMetrics
 from models.model import Model
 from models.model_config import ModelConfig
 from products.product import Product
@@ -63,60 +64,45 @@ class SimulationController:
         self, 
         portfolio           : Sequence[Product],      # Portfolio containing all products to be evaluated
         model               : Model,                  # Model used to simulate paths
-        metrics             : Sequence[Metric],       # Collection of metrics used to compute outputs
+        risk_metrics        : RiskMetrics,            # Collection of metrics used to compute outputs
         num_paths_mainsim   : int,                    # Number of Monte Carlo paths used for main simulation
         num_paths_presim    : int,                    # Number of Monte Carlo paths used for pre simulation
         num_steps           : int,                    # Number of time steps used for path simulation
         simulation_scheme   : SimulationScheme,       # Set Simulation Scheme: Schemes currently provided: Analytical, Euler, Milstein
         differentiate       : bool = False,           # Turn differentiation on or off
-        exposure_timeline   : Union[List[float], np.ndarray, None] = None,     # Set timeline for exposure simulation
         regression_function : RegressionFunction = PolyomialRegression(degree=2)
     ):  
-        
-        if exposure_timeline is None:
-            exposure_timeline = []
-            
-        self.exposure_timeline = torch.tensor(exposure_timeline, dtype=FLOAT, device=device)
+        self.risk_metrics = risk_metrics
         
         # Set up requests for each exposure timepoint
         self.numeraire_requests: dict[tuple[int, str], AtomicRequest] = {
-            (idx, "numeraire"): AtomicRequest(AtomicRequestType.NUMERAIRE, time1=t)
-            for idx, t in enumerate(exposure_timeline)
+            (idx, "numeraire"): AtomicRequest(AtomicRequestType.NUMERAIRE, time1=t.item())
+            for idx, t in enumerate(risk_metrics.exposure_timeline)
         }
 
         self.spot_requests: dict[tuple[int, str], AtomicRequest] = {
             (t_idx, asset_id): AtomicRequest(AtomicRequestType.SPOT)
             for prod in portfolio
             for asset_id in prod.asset_ids
-            for t_idx in range(len(exposure_timeline))
+            for t_idx in range(len(risk_metrics.exposure_timeline))
         }
 
         # If CVA is requested, ensure ModelConfig has a credit model and add requests to compute 
         # intermediate probabilities in terms of numeraire requests
         self.survival_prob_requests: dict[tuple[int, str], AtomicRequest] = {}
         self.cond_survival_prob_requests: dict[tuple[int, str], AtomicRequest] = {}
-        if any(metric.metric_type == MetricType.CVA for metric in metrics):
+        if risk_metrics.any_xva:
             if not isinstance(model, ModelConfig):
-                raise Exception("ModelConfig needs to be provided for CVA modeling.")
+                raise Exception("ModelConfig needs to be provided for xVA valuation.")
 
-            credit_model = model.id_to_model.get("issuer")
-            if credit_model is None:
-                raise Exception("Model for credit valuation needs to be set for CVA modeling.")
-            
-            for idx in range(len(exposure_timeline)-1):
-                label = (idx, "issuer")
-                self.cond_survival_prob_requests[label] = AtomicRequest(
-                        AtomicRequestType.CONDITIONAL_SURVIVAL_PROBABILITY,
-                        time1 = exposure_timeline[idx],
-                        time2 = exposure_timeline[idx+1],  
-                    )
-                self.survival_prob_requests[label] = AtomicRequest(
-                        AtomicRequestType.SURVIVAL_PROBABILITY,
-                    )
+            counterparty_ids = risk_metrics.counterparty_ids
+            if not all(
+                counterparty in model.id_to_model for counterparty in counterparty_ids
+            ):
+                raise Exception("Not all models set for xVA valuation.")
 
         self.portfolio = portfolio
         self.model = model
-        self.metrics = metrics
         self.num_paths_presim = num_paths_presim
         self.num_paths_mainsim = num_paths_mainsim
         self.num_steps = num_steps
@@ -142,7 +128,7 @@ class SimulationController:
         self.regression_coeffs = []
 
         degree = self.regression_function.get_degree()
-        num_time_points = len(self.exposure_timeline)
+        num_time_points = len(self.risk_metrics.exposure_timeline)
 
         for prod in portfolio:
             prod._allocate_regression_coeffs(self.regression_function)
@@ -159,14 +145,17 @@ class SimulationController:
         # Remove duplicates and sort timeline
         # Store as common simulation timellne
         prod_times = {float(t.item()) for prod in self.portfolio for t in prod.modeling_timeline}
-        exposure_times = {t for t in exposure_timeline}
+        exposure_times = {t.item() for t in self.risk_metrics.exposure_timeline}
         all_times = sorted(prod_times.union(exposure_times))
         self.simulation_timeline = torch.tensor(all_times, dtype=FLOAT, device=device)
 
         # Decide whether regression is required
         # If no product in the portfolio needs to be constructed and
         # no exposure metric needs to be evaluated, the regression step in the preprocessing phase can be skipped
-        self.requires_regression = any(len(prod.regression_timeline) > 0 for prod in self.portfolio) or len(exposure_timeline) > 0
+        self.requires_regression = any(
+            len(prod.regression_timeline) > 0 
+            for prod in self.portfolio) or len(self.risk_metrics.exposure_timeline
+        ) > 0
 
     def _get_requests(self) -> dict[tuple[int, str], set[AtomicRequest]]:
         """Collect and return all requests for exposure computation."""
@@ -176,12 +165,11 @@ class SimulationController:
             
         for label, req in self.spot_requests.items():
             requests[label].add(req)
-
-        for label, req in self.survival_prob_requests.items():
-            requests[label].add(req)
             
-        for label, req in self.cond_survival_prob_requests.items():
-            requests[label].add(req)
+        for metric in self.risk_metrics.metrics:
+            for label, reqs in metric.get_requests().items():
+                for req in reqs:
+                    requests[label].add(req)
 
         return requests
     
@@ -195,7 +183,7 @@ class SimulationController:
         Collect and Index requests for each product and exposure timepoint
         Perform rergression of products need to be built or exposure metrics need to be computated otherwise skip
         """
-        request_interface.collect_and_index_requests(self.portfolio,self.simulation_timeline, self._get_requests(), self.exposure_timeline)
+        request_interface.collect_and_index_requests(self.portfolio,self.simulation_timeline, self._get_requests(), self.risk_metrics.exposure_timeline)
         if self.requires_regression:
             self._perform_regression(products, request_interface)
 
@@ -226,7 +214,7 @@ class SimulationController:
         Perform regression for a specific product via Dynamic Porgramming using the LSM algorithm
         """
 
-        regression_timeline = set(product.regression_timeline.tolist()).union(self.exposure_timeline.tolist())
+        regression_timeline = set(product.regression_timeline.tolist()).union(self.risk_metrics.exposure_timeline.tolist())
         regression_timeline = torch.tensor(sorted(regression_timeline), dtype=FLOAT, device=device)
 
         product_timeline = product.product_timeline
@@ -290,7 +278,7 @@ class SimulationController:
                 numeraire = resolved_requests[0][product.numeraire_requests[i_t].handle]
                 explanatory = resolved_requests[0][product.spot_requests[(i_t, product.asset_ids[0])].handle]
             else:
-                i_t = self.exposure_timeline.tolist().index(t_reg)
+                i_t = self.risk_metrics.exposure_timeline.tolist().index(t_reg)
                 numeraire = resolved_requests[0][self.numeraire_requests[(i_t, "numeraire")].handle]
                 explanatory = resolved_requests[0][self.spot_requests[(i_t, product.asset_ids[0])].handle]
 
@@ -307,8 +295,8 @@ class SimulationController:
                 product_reg_idx = torch.searchsorted(product_regression_timeline, t_reg).item()
                 product.regression_coeffs[product_reg_idx, :, :] = coeffs_mat                
 
-            if t_reg in self.exposure_timeline:
-                exp_reg_idx = torch.searchsorted(self.exposure_timeline, t_reg).item()
+            if t_reg in self.risk_metrics.exposure_timeline:
+                exp_reg_idx = torch.searchsorted(self.risk_metrics.exposure_timeline, t_reg).item()
                 self.regression_coeffs[product.product_id][exp_reg_idx, :, :] = coeffs_mat
 
     def _evaluate_product(self, product: Product, resolved_requests: List[dict]):
@@ -320,10 +308,8 @@ class SimulationController:
         t_start = 0
         cfs = torch.zeros(num_paths, dtype=FLOAT, device=device)
 
-        any_pv = any(m.metric_type == MetricType.PV for m in self.metrics)
-
         # Case 1: no exposure timeline, only PV
-        if len(self.exposure_timeline) == 0 and any_pv:
+        if len(self.risk_metrics.exposure_timeline) == 0 and self.risk_metrics.any_pv:
             while t_start < len(product.product_timeline):
                 state_transition_matrix, new_cfs = product.compute_normalized_cashflows(
                     t_start,
@@ -337,7 +323,7 @@ class SimulationController:
 
         else:
             # Case 2: exposures and maybe PV
-            for i, t in enumerate(self.exposure_timeline):
+            for i, t in enumerate(self.risk_metrics.exposure_timeline):
 
                 # advance product's realized state forward until exposure time point is reached
                 while t_start < len(product.product_timeline) and product.product_timeline[t_start] <= t:
@@ -368,7 +354,7 @@ class SimulationController:
 
                 exposures.append(exposure)
 
-                if any_pv:
+                if self.risk_metrics.any_pv:
                     while t_start < len(product.product_timeline):
                         state_transition_matrix, new_cfs = product.compute_normalized_cashflows(
                             t_start,
@@ -380,28 +366,11 @@ class SimulationController:
                         cfs += new_cfs[:, 0]
                         t_start += 1
 
-        results = []
-        survival_probs: list[torch.Tensor] = []
-        cond_survival_probs: list[torch.Tensor] = []
-        if any(metric.metric_type == MetricType.CVA for metric in self.metrics):
-            for _, req in self.survival_prob_requests.items():
-                survival_prob = resolved_requests[0][req.handle]
-                survival_probs.append(survival_prob)
-                
-            for _, req in self.cond_survival_prob_requests.items():
-                cond_survival_prob = resolved_requests[0][req.handle]
-                cond_survival_probs.append(cond_survival_prob)
-            
-        for metric in self.metrics:
-            eval_val = metric.evaluate(
-                exposures=exposures, 
-                cfs=cfs,
-                survival_probs=survival_probs,
-                cond_survival_probs=cond_survival_probs,
-                )
-            results.append(eval_val)
-
-        return results
+        return self.risk_metrics.evaluate(
+            exposures=exposures, 
+            cfs=cfs,
+            resolved_requests=resolved_requests,
+        )
 
     def evaluate_products(self, resolved_requests : List[dict]) -> SimulationResults:
         """Compute metric outputs in main simulation phase."""
