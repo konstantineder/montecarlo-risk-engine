@@ -37,7 +37,17 @@ class SimulationResults:
 
     def get_results(self, prod_idx, metric_idx):
         """Get Metric outputs for each product and metric."""
-        return self.results[prod_idx][metric_idx]
+        results = self.results[prod_idx][metric_idx]
+        simulation_results = [result[0] for result in results]
+        simulation_results = np.array(simulation_results)
+        return simulation_results
+    
+    def get_mc_error(self, prod_idx, metric_idx):
+        """Get MC errors for Metric outputs for each product and metric."""
+        results = self.results[prod_idx][metric_idx]
+        mc_errors = [result[1] for result in results]
+        mc_errors = np.array(mc_errors)
+        return mc_errors
 
     def get_derivatives(self, prod_idx, metric_idx):
         """
@@ -405,7 +415,7 @@ class SimulationController:
                 grads_per_metric = []
                 for metric in prod:
                     grads_per_eval = []
-                    for eval in metric:
+                    for eval,_ in metric:
                         _grads = torch.autograd.grad(
                             eval,
                             model_params,

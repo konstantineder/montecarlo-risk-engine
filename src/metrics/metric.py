@@ -23,6 +23,17 @@ class Metric:
         self.metric_type=metric_type
         self.evaluation_type=evaluation_type
         
+    def _compute_mc_mean_and_error(self, values: torch.Tensor):
+        """
+        values: tensor [num_paths]
+        Returns: (mean, mc_error)
+        """
+        num_paths = values.shape[0]
+        mean = values.mean()
+        sigma = values.std(unbiased=True)
+        mc_error = sigma / torch.sqrt(torch.tensor(num_paths, dtype=FLOAT, device=device))
+        return mean, mc_error
+        
     def set_requests(self, exposure_timeline: torch.Tensor) -> None:
         pass
     

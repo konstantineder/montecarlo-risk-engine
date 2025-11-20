@@ -8,5 +8,5 @@ class PVMetric(Metric):
     def evaluate_analytically(self, **kwargs):
         raise NotImplementedError("Analytical PV not implemented.")
 
-    def evaluate_numerically(self, cfs, **kwargs):
-        return [cfs.mean()]
+    def evaluate_numerically(self, cfs: torch.Tensor, **kwargs) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        return [self._compute_mc_mean_and_error(cfs)]

@@ -9,6 +9,7 @@ from itertools import product as cartesian_product
 from controller.controller import SimulationController
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
+from metrics.risk_metrics import RiskMetrics
 from products.european_option import EuropeanOption, OptionType
 from common.enums import SimulationScheme
 from products.equity import Equity
@@ -71,8 +72,9 @@ if __name__ == "__main__":
             #portfolio=[BarrierOption(strike, 120,BarrierOptionType.UPANDOUT,0,T,OptionType.CALL,True,10)]
             portfolio = [product]
             metrics=[PVMetric()]
+            risk_metrics=RiskMetrics(metrics=metrics)
             vomma_analytic=product.compute_dVegadSigma_analytically(model)
-            sc=SimulationController(portfolio, model, metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
+            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
             sc.compute_higher_derivatives()
             sim_results=sc.run_simulation()
             super_greeks=sim_results.get_second_derivatives(0,0)[0]

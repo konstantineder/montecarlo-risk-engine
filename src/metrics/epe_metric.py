@@ -8,9 +8,9 @@ class EPEMetric(Metric):
     def evaluate_analytically(self, **kwargs):
         raise NotImplementedError("Analytical EE not implemented.")
 
-    def evaluate_numerically(self, exposures, **kwargs):
+    def evaluate_numerically(self, exposures: list[torch.Tensor], **kwargs) -> list[tuple[torch.Tensor, torch.Tensor]]:
         expected_exposures=[]
         for e in exposures:
-            ee = torch.relu(e).mean()
-            expected_exposures.append(ee)
+            pe = torch.relu(e)
+            expected_exposures.append(self._compute_mc_mean_and_error(pe))
         return expected_exposures

@@ -13,4 +13,4 @@ class EEPEMetric(Metric):
         for e in exposures:
             ee = torch.relu(e).mean()
             expected_exposures.append(ee)
-        return [torch.stack(expected_exposures).mean()]  # Return for each time point
+        return [self._compute_mc_mean_and_error(torch.stack(expected_exposures))]  # Return for each time point

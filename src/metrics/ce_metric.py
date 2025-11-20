@@ -8,6 +8,6 @@ class CEMetric(Metric):
     def evaluate_analytically(self, **kwargs):
         raise NotImplementedError("Analytical EE not implemented.")
 
-    def evaluate_numerically(self, exposures, **kwargs):
+    def evaluate_numerically(self, exposures: list[torch.Tensor], **kwargs) -> list[tuple[torch.Tensor, torch.Tensor]]:
         current_exposures=torch.relu(exposures[0])
-        return [current_exposures.mean()]
+        return [self._compute_mc_mean_and_error(current_exposures)]

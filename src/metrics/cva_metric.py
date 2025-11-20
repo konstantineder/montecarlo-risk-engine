@@ -61,7 +61,7 @@ class CVAMetric(Metric):
         exposures: list[torch.Tensor], 
         resolved_requests: list[dict], 
         **kwargs
-    ) -> list[torch.Tensor]:
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
         """
         kwargs:
             exposures:       list[Tensor] of length N, each (num_paths,)
@@ -92,6 +92,6 @@ class CVAMetric(Metric):
             cva_pathwise += e_pos * default_prob   
 
         # Monte Carlo average and LGD
-        cva = (1.0 - self.recovery_rate) * cva_pathwise.mean()
-
-        return [cva]
+        cva_pathwise *= (1.0 - self.recovery_rate)
+        cva, mc_error = self._compute_mc_mean_and_error(cva_pathwise)
+        return [(cva, mc_error)]

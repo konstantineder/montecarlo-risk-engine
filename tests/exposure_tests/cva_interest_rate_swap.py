@@ -15,10 +15,11 @@ from models.model_config import ModelConfig
 from metrics.cva_metric import CVAMetric 
 from metrics.risk_metrics import RiskMetrics
 from products.swap import InterestRateSwap, IRSType
+from helpers.kaggle_data_helper import download_and_retrieve_data_from_kaggle
 
-sys.path.append(os.path.abspath(".."))
-output_path = "tests/data/cds_data.csv"
-df = pd.read_csv(output_path)
+HANDLE = "debashish311601/credit-default-swap-cds-prices"
+
+df = download_and_retrieve_data_from_kaggle(handle=HANDLE, relative_output_path="cds_data.csv")
 
 # Select 5Y tenor (most liquid)
 TENOR_COL = "PX6"  
@@ -94,64 +95,107 @@ check_df.sort_values(["Company", "Tenor (y)"], inplace=True)
 
 hazards: dict[float, float] = dict(zip(TENORS, haz))
 
-# Setup model and product
-interest_rate_model = VasicekModel(
-    calibration_date=0.,
-    rate=0.03,
-    mean=0.05,
-    mean_reversion_speed=0.02,
-    volatility=0.2,
-    asset_id="irs"
+def compute_cva_irs(correlation: float):
+    """Compute CVA for a payer interest rate swap with given correlation
+    between interest rates and default intensity.
+    """
+
+    # Setup model and product
+    interest_rate_model = VasicekModel(
+        calibration_date=0.,
+        rate=0.03,
+        mean=0.05,
+        mean_reversion_speed=0.02,
+        volatility=0.2,
+        asset_id="irs"
+    )
+    counterparty_id = "General Motors Co"
+    intensity_model = CIRPPModel(
+        calibration_date=0.,
+        y0=0.0001,
+        theta=0.01,
+        kappa=0.1,
+        volatility=0.02,
+        hazard_rates=hazards,
+        asset_id=counterparty_id
+    )
+    models = [interest_rate_model, intensity_model]
+    inter_correlation_matrices: list[np.ndarray] = []
+    inter_correlation_matrix = np.array([correlation])
+    inter_correlation_matrices.append(inter_correlation_matrix)
+
+    model_config = ModelConfig(
+        models=models,
+        inter_asset_correlation_matrix=inter_correlation_matrix,
+    )
+
+    maturity = 10.0
+    irs = InterestRateSwap(
+        startdate=0.0,
+        enddate=maturity,
+        notional=1.0,
+        fixed_rate=0.03,
+        tenor_fixed=0.25,
+        tenor_float=0.25, 
+        irs_type=IRSType.PAYER,
+        asset_id="irs"
+    )
+    portfolio=[irs]
+
+    # Metric timeline for EE
+    exposure_timeline = np.linspace(0, maturity,100)
+    cva_metric = CVAMetric(counterparty_id=counterparty_id,recovery_rate=0.4)
+
+    metrics=[cva_metric]
+    risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
+
+    num_paths_mainsim=100000
+    num_paths_presim=100000
+    num_steps=10
+    sc=SimulationController(portfolio, model_config, risk_metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False)
+
+    sim_results=sc.run_simulation()
+
+    cva_irs=sim_results.get_results(0,0)[0]
+    cva_irs_error=sim_results.get_mc_error(0,0)[0]
+    
+    return (cva_irs, cva_irs_error)
+
+correlations = np.linspace(-0.95, 0.95, 25)
+
+cva_vals = []
+cva_errs = []
+
+for rho in correlations:
+    cva, err = compute_cva_irs(rho)
+    cva_vals.append(cva)
+    cva_errs.append(err)
+
+plt.figure(figsize=(8,5))
+
+# error bar plot
+plt.errorbar(
+    correlations, cva_vals, yerr=cva_errs,
+    fmt='o-', color='black', ecolor='gray', capsize=3, label='CVA with correlation'
 )
-counterparty_id = "General Motors Co"
-intensity_model = CIRPPModel(
-    calibration_date=0.,
-    y0=0.0001,
-    theta=0.01,
-    kappa=0.1,
-    volatility=0.02,
-    hazard_rates=hazards,
-    asset_id=counterparty_id
-)
-models = [interest_rate_model, intensity_model]
-inter_correlation_matrices: list[np.ndarray] = []
-inter_correlation_matrix = np.array([0.])
-inter_correlation_matrices.append(inter_correlation_matrix)
 
-model_config = ModelConfig(
-    models=models,
-    inter_asset_correlation_matrix=inter_correlation_matrix,
+cva_uncorr, cva_uncorr_err = compute_cva_irs(0.0)
+
+# baseline uncorrelated CVA
+plt.axhline(
+    y=cva_uncorr, color='blue', linestyle='--',
+    label=f'Uncorrelated CVA = {cva_uncorr:.4f}'
 )
 
-maturity = 10.0
-irs = InterestRateSwap(
-    startdate=0.0,
-    enddate=maturity,
-    notional=1.0,
-    fixed_rate=0.03,
-    tenor_fixed=0.25,
-    tenor_float=0.25, 
-    irs_type=IRSType.PAYER,
-    asset_id="irs"
-)
-portfolio=[irs]
+plt.xlabel("Correlation ρ between interest rate and intensity")
+plt.ylabel("CVA")
+plt.title("CVA vs Correlation (Wrong-Way / Right-Way Risk)")
+plt.grid(True)
+plt.legend()
 
-# Metric timeline for EE
-exposure_timeline = np.linspace(0, maturity,100)
-cva_metric = CVAMetric(counterparty_id=counterparty_id,recovery_rate=0.4)
+out_dir = os.path.join("tests", "plots", "exposure_tests")
+os.makedirs(out_dir, exist_ok=True)
 
-metrics=[cva_metric]
-risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
-
-num_paths_mainsim=100000
-num_paths_presim=100000
-num_steps=10
-sc=SimulationController(portfolio, model_config, risk_metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False)
-
-sim_results=sc.run_simulation()
-
-cva_irs=sim_results.get_results(0,0)[0]
-
-print("CVA from simulation:", cva_irs.item())
-
-
+out_path = os.path.join(out_dir, "cva_payer_swap.png")
+plt.savefig(out_path)
+print(f"Plot saved to {out_path}")
