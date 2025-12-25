@@ -10,7 +10,7 @@ class Model:
         self, 
         calibration_date : float, # Calibration date of the model
         simulation_dim   : int = 1,
-        state_dim      : int = 1,
+        state_dim        : int = 1,
         asset_ids        : list[str] | None = None,
     ):
         
@@ -20,6 +20,8 @@ class Model:
         self.num_assets = len(self.asset_ids) 
         self.simulation_dim = simulation_dim
         self.state_dim = state_dim
+        
+        self.perform_smoothing = False
         
         self._cholesky: dict[tuple[str, float | None], torch.Tensor] = {}
     
@@ -59,14 +61,14 @@ class Model:
         else:
             key = (simulation_scheme, None)
             if key not in self._cholesky:
-                corr = self._get_correlation_matrix()
+                corr = self._get_correlation_matrix(simulation_scheme)
                 chol = torch.linalg.cholesky(corr)
                 self._cholesky[key] = chol
                 return chol
             else:
                 return self._cholesky[key]
                 
-    def _get_correlation_matrix(self) -> torch.Tensor:
+    def _get_correlation_matrix(self, simulation_scheme: SimulationScheme) -> torch.Tensor:
         """Compute correlation matrix"""
         return torch.eye(self.simulation_dim, dtype=FLOAT, device=device)
     
@@ -79,6 +81,7 @@ class Model:
         If differentiation is enabled, put all model parameters on tape
         and accumulate adjoints during simulation via AAD        
         """
+        self.perform_smoothing = True
         for param in self.model_params:
             param.requires_grad_(True)
 
@@ -105,6 +108,19 @@ class Model:
         Euler–Maruyama time step.
         """
         return NotImplementedError(f"Method not implemented")
+    
+    def simulate_time_step_qe(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor, 
+        state: torch.Tensor, 
+        corr_randn: torch.Tensor  
+    ) -> torch.Tensor:
+        """
+        Time step simulated via Quadratic Exponential Scheme.
+        """
+        return NotImplementedError(f"Method not implemented")
+    
     
     def simulate_time_step_milstein(self, state: torch.Tensor, randn: torch.Tensor) -> torch.Tensor:
         """
