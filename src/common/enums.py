@@ -6,3 +6,4 @@ class SimulationScheme(Enum):
     EULER = 0
     MILSTEIN = 1
     ANALYTICAL = 2
+    QE = 3

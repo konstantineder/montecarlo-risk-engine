@@ -44,7 +44,7 @@ class BlackScholesMulti(Model):
     def get_state(self, num_paths: int):
         return self.get_spot().expand(num_paths, self.num_assets).clone()
     
-    def _get_correlation_matrix(self) -> torch.Tensor:
+    def _get_correlation_matrix(self, simulation_scheme: SimulationScheme) -> torch.Tensor:
         """Compute covrrelation_matrix."""
         return self.correlation_matrix
 

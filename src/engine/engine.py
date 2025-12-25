@@ -29,6 +29,8 @@ class MonteCarloEngine:
             return self._generate_paths_analytically(self.simulation_timeline,self.num_paths, self.num_steps)
         elif self.simulation_type==SimulationScheme.EULER:
             return self._generate_paths_euler(self.simulation_timeline,self.num_paths, self.num_steps)
+        elif self.simulation_type==SimulationScheme.QE:
+            return self._generate_paths_qe(self.simulation_timeline,self.num_paths, self.num_steps)
         
     def _generate_paths_analytically(
         self, 
@@ -80,6 +82,36 @@ class MonteCarloEngine:
                 for _ in range(num_steps):
                     corr_randn = self.model.generate_correlated_randn(num_paths, SimulationScheme.EULER, dt)
                     state = self.model.simulate_time_step_euler(
+                        time1=t_prev,
+                        time2=t_prev + dt,
+                        state=state,
+                        corr_randn=corr_randn
+                    )
+                    t_prev += dt
+            paths.append(state.clone())
+
+        return torch.stack(paths, dim=1)
+    
+    def _generate_paths_qe(
+        self, 
+        timeline: torch.Tensor, 
+        num_paths: int, 
+        num_steps: int,
+    ) -> torch.Tensor:
+        """Simulate Monte Carlo paths using Euler-Mayurama scheme."""
+        
+        state = self.model.get_state(num_paths)
+        paths: list = []
+
+        t_prev = self.model.calibration_date.clone()
+
+        for t_now in timeline:
+            dt_total = t_now - t_prev
+            dt = dt_total / num_steps
+            if dt > 0:
+                for _ in range(num_steps):
+                    corr_randn = self.model.generate_correlated_randn(num_paths, SimulationScheme.QE, dt)
+                    state = self.model.simulate_time_step_qe(
                         time1=t_prev,
                         time2=t_prev + dt,
                         state=state,

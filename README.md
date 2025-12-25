@@ -52,6 +52,7 @@ All metrics are computed via Monte Carlo and return **both the estimate and its 
 - **Equity**
   - Black–Scholes (single-asset)
   - Black–Scholes multi-asset
+  - Heston Model
 - **Interest Rates**
   - Vasicek
   - Hull–White
@@ -108,26 +109,32 @@ Expected and potential future exposure for a bermudan swaption:
 
 ---
 
-### CVA vs Correlation – Zero-Coupon Bond (RWR)
-
-CVA of a 2Y zero-coupon bond as a function of the correlation ρ between the short rate (Vasicek)
-and the default intensity (CIR++). Positive correlation leads to **right-way risk** (CVA decreases);
-negative correlation leads to **wrong-way risk** (CVA increases). Error bars show Monte Carlo
-standard errors.
-
-![CVA vs Correlation – Zero-Coupon Bond](docs/img/cva_bond.png)
-
----
-
 ### CVA vs Correlation – Payer Interest Rate Swap (WWR)
 
-CVA of a payer interest rate swap under the same hybrid model.  
-Here, positive correlation between rates and intensity induces **wrong-way risk**, so CVA
-**increases** with ρ. Negative correlation generates **right-way risk**.
+CVA of a payer interest rate swap as a function of the correlation ρ between the short rate (Vasicek)
+and the default intensity (CIR++). Positive correlation between rates and intensity induces **wrong-way risk**, so CVA
+**increases** with ρ. Negative correlation generates **right-way risk**. Error bars show Monte Carlo
+standard errors.
 
 ![CVA vs Correlation – Payer Swap](docs/img/cva_payer_swap.png)
 
 ---
+
+### Heston Model – Calibration, Pricing, and Sensitivities
+
+The Heston stochastic volatility model is calibrated to equity option data and used for pricing, risk, and convergence analysis.
+	•	Calibration recovers realistic skew and term structure, producing a smooth implied volatility surface
+	•	Pricing uses the Quadratic–Exponential (QE) scheme of Andersen (2007)
+	•	Fuzzy-logic smoothing is applied at the QE branching threshold to ensure numerical stability and full compatibility with pathwise AAD
+	•	Greeks (Delta, Vega) computed via AAD are validated against analytic finite differences
+	•	Convergence of Euler vs QE is analyzed with Monte Carlo error bars
+
+Results:
+![Calibrated Heston implied volatility surface](docs/img/heston_surface.png)
+![QE scheme analytcs (incl. greeks)](docs/img/heston_model_test.png)
+
+The QE scheme with fuzzy branching delivers accurate prices, stable sensitivities, and significantly faster convergence than Euler discretization, while remaining fully differentiable.
+
 
 ## Notebooks
 

@@ -87,7 +87,7 @@ class ModelConfig(Model):
             states.append(s)
         return torch.cat(states, dim=1)  
     
-    def _get_correlation_matrix(self) -> torch.Tensor:
+    def _get_correlation_matrix(self, simulation_scheme: SimulationScheme) -> torch.Tensor:
         """
         Joint correlation matrix, assembled block-wise:
         C = diag-blocks (intra) + off-diagonal blocks (inter).
@@ -101,7 +101,7 @@ class ModelConfig(Model):
             num_assets1 = model1.num_assets
 
             # diagonal (intra) block
-            corr[row:row+num_assets1, row:row+num_assets1] = model1._get_correlation_matrix()
+            corr[row:row+num_assets1, row:row+num_assets1] = model1._get_correlation_matrix(simulation_scheme)
 
             # off-diagonal (inter) blocks for j > i
             col = row + num_assets1
