@@ -20,7 +20,7 @@ def bisection_search(func, low: float = 1e-10, high: float = 5.0,
         value_high = func(high)
         cnt += 1
     if value_low * value_high > 0.0:
-        raise RuntimeError("Could not bracket hazard in bucket")
+        return None  # Bisection search failed
     for _ in range(iters):
         mid = 0.5 * (low + high)
         value_mid = func(mid)

@@ -16,7 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 
-# Use CUDA wheels only when requested
 RUN pip install --upgrade pip && \
     if [ "$TORCH_CHANNEL" = "cu124" ]; then \
       PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu124" \
@@ -29,9 +28,8 @@ COPY . .
 
 # ---- test ----
 FROM base AS test
-# Ensure pytest is available (or include it in requirements.txt)
-# RUN pip install --no-cache-dir pytest
-RUN pytest -q tests/pytests
+ENV PYTHONPATH=/app
+RUN python -m pytest -q tests/pytests
 
 # ---- runtime ----
 FROM base AS runtime

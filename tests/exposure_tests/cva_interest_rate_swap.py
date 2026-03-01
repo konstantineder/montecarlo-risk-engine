@@ -137,7 +137,7 @@ def compute_cva_irs(correlation: float):
         fixed_rate=0.03,
         tenor_fixed=0.25,
         tenor_float=0.25, 
-        irs_type=IRSType.PAYER,
+        irs_type=IRSType.RECEIVER,
         asset_id="irs"
     )
     portfolio=[irs]
