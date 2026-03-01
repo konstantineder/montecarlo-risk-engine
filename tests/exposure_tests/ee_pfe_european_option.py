@@ -25,9 +25,12 @@ if __name__ == "__main__":
     strike = 100.0
 
     underlying=Equity()
-    product = EuropeanOption(underlying=underlying,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
+    
+    portfolio=[]
+    for _ in range(1000):
+        product = EuropeanOption(underlying=underlying,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
+        portfolio.append(product)
 
-    portfolio=[product]
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, 3.,100)
