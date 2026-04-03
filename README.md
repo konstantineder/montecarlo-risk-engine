@@ -117,14 +117,6 @@ Expected and potential future exposure for a bermudan swaption:
 
 ---
 
-### Collateralized Exposure
-
-Collateralized and uncollateralized exposure profiles can be compared at the netting-set level, including CSA-style delayed collateral effects via MPoR:
-
-![Collateralized swap exposure](docs/img/exposure_swap_collateralized.png)
-
----
-
 ### CVA vs Correlation – Payer Interest Rate Swap (WWR)
 
 CVA of a payer interest rate swap as a function of the correlation ρ between the short rate (Vasicek)
