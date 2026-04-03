@@ -8,6 +8,7 @@ from IPython.display import display
 import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -41,17 +42,30 @@ if __name__ == "__main__":
         for T, S0, sigma, rate, strike in param_grid:
             model = BlackScholesModel(0, S0, rate, sigma)
             product = BinaryOption(T,strike,10,OptionType.CALL)
-            #portfolio=[BarrierOption(strike, 120,BarrierOptionType.UPANDOUT,0,T,OptionType.CALL,True,10)]
-            portfolio = [product]
-            risk_metrics=RiskMetrics(metrics=[PVMetric()])
+            netting_set = NettingSet(name=product.get_name(), products=[product])
+            pv_metric = PVMetric()
+            risk_metrics=RiskMetrics(metrics=[pv_metric])
             # Compute analytical price (if available)
             price_analytical = product.compute_pv_analytically(model)
 
-            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
+            sc = SimulationController(
+                netting_sets=[netting_set],
+                model=model,
+                risk_metrics=risk_metrics,
+                num_paths_mainsim=num_paths,
+                num_paths_presim=0,
+                num_steps=steps,
+                simulation_scheme=SimulationScheme.ANALYTICAL,
+                differentiate=True,
+            )
 
             sim_results=sc.run_simulation()
-            price_sim=sim_results.get_results(0,0)
-            greeks=sim_results.get_derivatives(0,0)[0]
+            price_sim=sim_results.get_results(netting_set.get_name(), pv_metric.get_name())
+            greeks=sim_results.get_derivatives(
+                netting_set.get_name(),
+                pv_metric.get_name(),
+                evaluation_idx=0,
+            )
             error_sim = rel_err(price_sim[0], float(price_analytical[0]))
 
             results.append({
@@ -62,9 +76,9 @@ if __name__ == "__main__":
                 "price": price_analytical,
                 "price (sim)": price_sim[0],
                 "rel. error (sim)": error_sim,
-                "Delta": greeks[0],
-                "Vega": greeks[1],
-                "Rho": greeks[2],
+                "Delta": greeks["spot"],
+                "Vega": greeks["volatility"],
+                "Rho": greeks["rate"],
             })
 
         return pd.DataFrame(results)

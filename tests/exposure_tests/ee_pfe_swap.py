@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.vasicek import VasicekModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
@@ -42,8 +43,11 @@ if __name__ == "__main__":
         tenor_float=0.25, 
         irs_type=IRSType.PAYER
     )
+    irs1.name = "irs1"
+    irs2.name = "irs2"
 
-    portfolio=[irs1, irs2]
+    netting_set_1 = NettingSet(name="irs1_ns", products=[irs1])
+    netting_set_2 = NettingSet(name="irs2_ns", products=[irs2])
 
     # Metric timeline for exposure metrics
     exposure_timeline = np.linspace(0, 3.,100)
@@ -61,7 +65,7 @@ if __name__ == "__main__":
     num_steps=1
     
     sc = SimulationController(
-        portfolio=portfolio, 
+        netting_sets=[netting_set_1, netting_set_2],
         model=model, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths_mainsim, 
@@ -73,10 +77,10 @@ if __name__ == "__main__":
 
     sim_results=sc.run_simulation()
 
-    ees_irs1=sim_results.get_results(0,0)
-    enes_irs1=sim_results.get_results(0,1)
-    ees_irs2=sim_results.get_results(1,0)
-    pfes_irs1=sim_results.get_results(0,2)
+    ees_irs1=sim_results.get_results(netting_set_1.get_name(), epe_metric.get_name())
+    enes_irs1=sim_results.get_results(netting_set_1.get_name(), ene_metric.get_name())
+    ees_irs2=sim_results.get_results(netting_set_2.get_name(), epe_metric.get_name())
+    pfes_irs1=sim_results.get_results(netting_set_1.get_name(), pfe_metric.get_name())
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
 

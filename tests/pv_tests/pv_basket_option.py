@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.black_scholes_multi import BlackScholesMulti
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -44,17 +45,34 @@ if __name__ == "__main__":
             model = BlackScholesMulti(0.0,rate,asset_ids,spots,sigmas,correlation_matrix)
 
             bo_artm = BasketOption(T,asset_ids,weights,strike,OptionType.CALL,BasketOptionType.ARITHMETIC,True)
+            bo_artm.name = "basket_arithmetic"
             bo_geo = BasketOption(T,asset_ids,weights,strike,OptionType.CALL,BasketOptionType.GEOMETRIC)
+            bo_geo.name = "basket_geometric"
 
-            portfolio = [bo_artm,bo_geo]
-            risk_metrics=RiskMetrics(metrics=[PVMetric()])
+            arithmetic_netting_set = NettingSet(name=bo_artm.get_name(), products=[bo_artm])
+            geometric_netting_set = NettingSet(name=bo_geo.get_name(), products=[bo_geo])
+            pv_metric = PVMetric()
+            risk_metrics=RiskMetrics(metrics=[pv_metric])
 
-            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.ANALYTICAL, True)
+            sc = SimulationController(
+                netting_sets=[arithmetic_netting_set, geometric_netting_set],
+                model=model,
+                risk_metrics=risk_metrics,
+                num_paths_mainsim=num_paths,
+                num_paths_presim=0,
+                num_steps=steps,
+                simulation_scheme=SimulationScheme.ANALYTICAL,
+                differentiate=True,
+            )
 
             sim_results=sc.run_simulation()
-            price_artm=sim_results.get_results(0,0)
-            price_geo=sim_results.get_results(1,0)
-            greeks_geo=sim_results.get_derivatives(1,0)[0]
+            price_artm=sim_results.get_results(arithmetic_netting_set.get_name(), pv_metric.get_name())
+            price_geo=sim_results.get_results(geometric_netting_set.get_name(), pv_metric.get_name())
+            greeks_geo=sim_results.get_derivatives(
+                geometric_netting_set.get_name(),
+                pv_metric.get_name(),
+                evaluation_idx=0,
+            )
 
             results.append({
                 "spot": S0,
@@ -63,9 +81,9 @@ if __name__ == "__main__":
                 "time to maturity": T,
                 "price (artm)": price_artm[0],
                 "price (geo)": price_geo[0],
-                "Delta": greeks_geo[0],
-                "Vega": greeks_geo[4],
-                "Rho": greeks_geo[8],
+                "Delta": greeks_geo["spot[asset1]"],
+                "Vega": greeks_geo["volatility[asset1]"],
+                "Rho": greeks_geo["rate"],
             })
 
         return pd.DataFrame(results)
@@ -93,11 +111,9 @@ if __name__ == "__main__":
     model=BlackScholesMulti(0.0,rate,asset_ids,spots,sigmas,correlation_matrix)
     weights=[0.25,0.25,0.25,0.25]
     basket=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.ARITHMETIC,True)
+    basket.name = "basket_arithmetic"
     basket_geo=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
-
-    portfolio=[basket,basket_geo]
-
-    metrics = [PVMetric()]
+    basket_geo.name = "basket_geometric"
 
     # Cartesian product of all combinations
     # defining the parameter grid

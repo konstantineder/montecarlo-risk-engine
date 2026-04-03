@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.vasicek import VasicekModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
@@ -46,7 +47,7 @@ if __name__ == "__main__":
         option_type=OptionType.CALL
     )
 
-    portfolio=[product]
+    netting_set = NettingSet(name="swaption_ns", products=[product])
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, 3.,100)
@@ -63,7 +64,7 @@ if __name__ == "__main__":
     num_steps=1
     
     sc = SimulationController(
-        portfolio=portfolio, 
+        netting_sets=[netting_set],
         model=model, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths_mainsim, 
@@ -75,8 +76,8 @@ if __name__ == "__main__":
 
     sim_results=sc.run_simulation()
 
-    ees=sim_results.get_results(0,0)
-    pfes=sim_results.get_results(0,1)
+    ees=sim_results.get_results(netting_set.get_name(), ee_metric.get_name())
+    pfes=sim_results.get_results(netting_set.get_name(), pfe_metric.get_name())
 
     plt.figure(figsize=(10, 6))
     plt.plot(exposure_timeline, ees, label='Expected Exposure (EE)', color='red')

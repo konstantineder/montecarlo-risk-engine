@@ -9,6 +9,7 @@ from common.packages import *
 from common.enums import SimulationScheme
 import matplotlib.pyplot as plt
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.vasicek import VasicekModel
 from models.cirpp import CIRPPModel
 from models.model_config import ModelConfig
@@ -140,7 +141,7 @@ def compute_cva_irs(correlation: float):
         irs_type=IRSType.RECEIVER,
         asset_id="irs"
     )
-    portfolio=[irs]
+    netting_set = NettingSet(name="irs_cva_ns", products=[irs], counterparty_id=counterparty_id)
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, maturity,100)
@@ -152,12 +153,21 @@ def compute_cva_irs(correlation: float):
     num_paths_mainsim=100000
     num_paths_presim=100000
     num_steps=10
-    sc=SimulationController(portfolio, model_config, risk_metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False)
+    sc=SimulationController(
+        netting_sets=[netting_set],
+        model=model_config,
+        risk_metrics=risk_metrics,
+        num_paths_mainsim=num_paths_mainsim,
+        num_paths_presim=num_paths_presim,
+        num_steps=num_steps,
+        simulation_scheme=SimulationScheme.EULER,
+        differentiate=False,
+    )
 
     sim_results=sc.run_simulation()
 
-    cva_irs=sim_results.get_results(0,0)[0]
-    cva_irs_error=sim_results.get_mc_error(0,0)[0]
+    cva_irs=sim_results.get_results(netting_set.get_name(), cva_metric.get_name(), evaluation_idx=0)
+    cva_irs_error=sim_results.get_mc_error(netting_set.get_name(), cva_metric.get_name(), evaluation_idx=0)
     
     return (cva_irs, cva_irs_error)
 

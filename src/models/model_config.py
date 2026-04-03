@@ -56,10 +56,13 @@ class ModelConfig(Model):
             self.model_state_offset[idx] = offset
             offset += model.state_dim
 
-        # collect shapes
-        shapes = [len(model.get_model_params()) for model in models]
-        total_dim = sum(shapes)
-        self.model_params = torch.zeros(total_dim, dtype=FLOAT, device=device)
+        # Flatten sub-model parameters so differentiation on ModelConfig
+        # works through the actual tensors used by each child model.
+        self.model_params = [
+            param
+            for model in models
+            for param in model.get_model_params()
+        ]
             
         self.inter_asset_correlation_matrix: list[torch.Tensor] = []
         if inter_asset_correlation_matrix is None:
@@ -86,6 +89,14 @@ class ModelConfig(Model):
                 s = s.unsqueeze(1)           
             states.append(s)
         return torch.cat(states, dim=1)  
+
+    def get_model_param_names(self) -> list[str]:
+        names: list[str] = []
+        for idx, model in enumerate(self.models):
+            model_label = model.asset_ids[0] if len(model.asset_ids) == 1 and model.asset_ids[0] else model.__class__.__name__
+            for param_name in model.get_model_param_names():
+                names.append(f"{model_label}.{param_name}")
+        return names
     
     def _get_correlation_matrix(self, simulation_scheme: SimulationScheme) -> torch.Tensor:
         """
@@ -122,6 +133,7 @@ class ModelConfig(Model):
                     corr[col:col+num_assets2, row:row+num_assets1] = int_corr  
 
                 col += num_assets2
+                idx += 1
 
             row += num_assets1
 
@@ -170,6 +182,7 @@ class ModelConfig(Model):
                     cov[col:col+num_assets2, row:row+num_assets1] = block  
 
                 col += num_assets2
+                idx += 1
 
             row += num_assets1
 

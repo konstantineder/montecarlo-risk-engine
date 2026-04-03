@@ -40,6 +40,11 @@ class BlackScholesMulti(Model):
 
     def get_rate(self):
         return self.model_params[2*self.num_assets]
+
+    def get_model_param_names(self) -> list[str]:
+        spot_names = [f"spot[{asset_id}]" for asset_id in self.asset_ids]
+        vol_names = [f"volatility[{asset_id}]" for asset_id in self.asset_ids]
+        return [*spot_names, *vol_names, "rate"]
     
     def get_state(self, num_paths: int):
         return self.get_spot().expand(num_paths, self.num_assets).clone()
@@ -83,7 +88,12 @@ class BlackScholesMulti(Model):
         """
         Euler–Maruyama step for BS multi asset model.
         """
-        pass
+        delta_t = time2 - time1
+        rate = self.get_rate()
+        sigma = self.get_volatility().reshape(1, -1)
+        diffusion_scale = torch.sqrt(delta_t)
+        dS = rate * state * delta_t + sigma * state * diffusion_scale * corr_randn
+        return state + dS
 
     def resolve_request(self, req: AtomicRequest, asset_id: str, state: torch.Tensor) -> torch.Tensor:
         """Resolve requests posed by each product and at each exposure timepoint."""

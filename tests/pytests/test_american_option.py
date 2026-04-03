@@ -3,6 +3,7 @@ from context import *
 from common.packages import *
 import numpy as np
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -30,7 +31,7 @@ def test_american_option_pv():
         option_type=OptionType.CALL
     )
 
-    portfolio=[product]
+    netting_sets = [NettingSet(name=product.get_name(), products=[product])]
 
     # Metric timeline for exposure
     pv_metric = PVMetric()
@@ -43,7 +44,7 @@ def test_american_option_pv():
     num_paths_presim=100000
     num_steps=1
     sc = SimulationController(
-        portfolio=portfolio, 
+        netting_sets=netting_sets,
         model=model, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths_mainsim, 
@@ -55,7 +56,7 @@ def test_american_option_pv():
 
     sim_results=sc.run_simulation()
 
-    pv=sim_results.get_results(0,0)[0]
+    pv=sim_results.get_results(product.get_name(), pv_metric.get_name(), evaluation_idx=0)
     
     assert abs(pv - 34.323036543142706) < threshold  # Expected PV value
     

@@ -1,4 +1,5 @@
 from enum import Enum 
+from numbers import Integral
 from common.packages import *
 from request_interface.request_types import AtomicRequest, AtomicRequestType
 from collections import defaultdict
@@ -9,6 +10,8 @@ class RequestInterface:
     def __init__(self, model: Model):
         self.model = model # The model that can resolve requests
         self.num_requests=0
+        self.num_atomic_requests = 0
+        self.num_composite_requests = 0
         self.all_atomic_requests=defaultdict(set)
         self.all_composite_requests=defaultdict(set)
     
@@ -72,7 +75,11 @@ class RequestInterface:
 
         # Collect exposure requests from controller
         for (t, asset_id), exp_reqs in exposure_requests.items():
-            time_index = time_to_index[float(exposure_timeline[t])]
+            if isinstance(t, Integral):
+                exposure_time = exposure_timeline[t]
+            else:
+                exposure_time = torch.tensor(t, dtype=FLOAT, device=simulation_timeline.device)
+            time_index = time_to_index[float(exposure_time)]
             for exp_req in exp_reqs:
                 label = (time_index, asset_id)
                 all_requests[label].add(exp_req)
@@ -86,6 +93,8 @@ class RequestInterface:
 
         self.all_requests = all_requests
         self.all_composite_requests = all_comp_requests
+        self.num_atomic_requests = atomic_counter
+        self.num_composite_requests = comp_counter
 
     def _register_atomic_request(self,req, request_key_to_handle, time_index, asset_id, counter):
         key = (time_index, asset_id, req)
@@ -105,8 +114,8 @@ class RequestInterface:
 
     def resolve_requests(self, paths: torch.Tensor):
         """Resolve all requests once paths have been simulated."""
-        resolved_requests = {}
-        resolved_composite_requests = {}
+        resolved_requests = [None] * self.num_atomic_requests
+        resolved_composite_requests = [None] * self.num_composite_requests
 
         for (t, asset_id), reqs in self.all_requests.items():
             for req in reqs:

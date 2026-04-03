@@ -1,9 +1,8 @@
 from products.product import *
 from maths.maths import compute_degree_of_truth
-from request_interface.request_interface import AtomicRequestType, AtomicRequest
+from request_interface.request_types import AtomicRequestType, AtomicRequest
 import numpy as np
-from collections import defaultdict
-from typing import Union, List, Optional
+from typing import Optional, Sequence
 
 class BarrierOptionType(Enum):
     DOWNANDOUT = "Down-And-Out"
@@ -28,7 +27,10 @@ class BarrierOption(Product):
         asset_id                   : str | None = None,
     ): 
         
-        super().__init__(asset_ids=[asset_id])
+        super().__init__(
+            asset_ids=[asset_id],
+            product_family=ProductFamily.BARRIER_PATH_TERMINAL,
+        )
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.maturity=torch.tensor([maturity], dtype=FLOAT,device=device)
         self.product_timeline=torch.tensor([maturity], dtype=FLOAT,device=device)
@@ -47,57 +49,105 @@ class BarrierOption(Product):
         self.use_seed = 12345
         self.rng = np.random.default_rng(12345)
 
-        self.numeraire_requests={
-            idx: AtomicRequest(AtomicRequestType.NUMERAIRE,t) 
+        self.numeraire_requests = {
+            idx: AtomicRequest(AtomicRequestType.NUMERAIRE, t)
             for idx, t in enumerate(self.modeling_timeline)
-            }
+        }
         asset_id = self.get_asset_id()
-        self.spot_requests={
-            (idx, asset_id): AtomicRequest(AtomicRequestType.SPOT) 
+        self.spot_requests = {
+            (idx, asset_id): AtomicRequest(AtomicRequestType.SPOT)
             for idx in range(len(self.modeling_timeline))
-            }
+        }
     
     def set_use_brownian_bridge(self):
         self.use_brownian_bridge = True
 
-    def compute_payoff_without_brownian_bridge(self, paths, model):
+    @staticmethod
+    def _compute_payoff_without_brownian_bridge_from_payload(
+        paths: torch.Tensor,
+        strike: torch.Tensor,
+        option_type: OptionType,
+        barrier1: torch.Tensor,
+        barrier_option_type1: BarrierOptionType,
+        barrier2: torch.Tensor | None = None,
+        barrier_option_type2: BarrierOptionType | None = None,
+    ) -> torch.Tensor:
         spots_at_maturity = paths[:,-1]
         max_spot = torch.max(paths, dim=1).values
         min_spot = torch.min(paths, dim=1).values
 
-        is_max_below_barrier = compute_degree_of_truth(self.barrier1-max_spot,True)
-        is_min_above_barrier = compute_degree_of_truth(min_spot - self.barrier1,True)
+        is_max_below_barrier = compute_degree_of_truth(barrier1 - max_spot, True)
+        is_min_above_barrier = compute_degree_of_truth(min_spot - barrier1, True)
 
-        zero=torch.tensor([0.0], device=device)
+        zero = torch.tensor([0.0], device=device)
 
         payoff = torch.zeros_like(spots_at_maturity)
 
-        if self.barrier_option_type1 == BarrierOptionType.UPANDOUT:
-            payoff = torch.maximum(spots_at_maturity - self.strike, zero) * is_max_below_barrier if self.option_type == OptionType.CALL else torch.maximum(self.strike - spots_at_maturity, zero) * is_max_below_barrier
-        if self.barrier_option_type1 == BarrierOptionType.DOWNANDOUT:
-            payoff = torch.maximum(spots_at_maturity - self.strike, zero) * is_min_above_barrier if self.option_type == OptionType.CALL else torch.maximum(self.strike - spots_at_maturity, zero) * is_min_above_barrier
-        if self.barrier_option_type1 == BarrierOptionType.UPANDIN:
-            payoff = torch.maximum(spots_at_maturity - self.strike, zero) * (1 - is_max_below_barrier) if self.option_type == OptionType.CALL else torch.maximum(self.strike - spots_at_maturity, zero) * (1 - is_max_below_barrier)
-        if self.barrier_option_type1 == BarrierOptionType.DOWNANDIN:
-            payoff = torch.maximum(spots_at_maturity - self.strike, zero) * (1 - is_min_above_barrier) if self.option_type == OptionType.CALL else torch.maximum(self.strike - spots_at_maturity, zero) * (1 - is_min_above_barrier)
+        if barrier_option_type1 == BarrierOptionType.UPANDOUT:
+            payoff = (
+                torch.maximum(spots_at_maturity - strike, zero) * is_max_below_barrier
+                if option_type == OptionType.CALL
+                else torch.maximum(strike - spots_at_maturity, zero) * is_max_below_barrier
+            )
+        if barrier_option_type1 == BarrierOptionType.DOWNANDOUT:
+            payoff = (
+                torch.maximum(spots_at_maturity - strike, zero) * is_min_above_barrier
+                if option_type == OptionType.CALL
+                else torch.maximum(strike - spots_at_maturity, zero) * is_min_above_barrier
+            )
+        if barrier_option_type1 == BarrierOptionType.UPANDIN:
+            payoff = (
+                torch.maximum(spots_at_maturity - strike, zero) * (1 - is_max_below_barrier)
+                if option_type == OptionType.CALL
+                else torch.maximum(strike - spots_at_maturity, zero) * (1 - is_max_below_barrier)
+            )
+        if barrier_option_type1 == BarrierOptionType.DOWNANDIN:
+            payoff = (
+                torch.maximum(spots_at_maturity - strike, zero) * (1 - is_min_above_barrier)
+                if option_type == OptionType.CALL
+                else torch.maximum(strike - spots_at_maturity, zero) * (1 - is_min_above_barrier)
+            )
         
-        if self.barrier2 is not None and self.barrier_option_type2 is not None:
+        if barrier2 is not None and barrier_option_type2 is not None:
 
-            is_max_below_barrier2 = compute_degree_of_truth(self.barrier2 - max_spot, True)
-            is_min_above_barrier2 = compute_degree_of_truth(min_spot - self.barrier2, True)
+            is_max_below_barrier2 = compute_degree_of_truth(barrier2 - max_spot, True)
+            is_min_above_barrier2 = compute_degree_of_truth(min_spot - barrier2, True)
 
-            if self.barrier_option_type2 == BarrierOptionType.UPANDOUT:
+            if barrier_option_type2 == BarrierOptionType.UPANDOUT:
                 payoff *= is_max_below_barrier2
-            elif self.barrier_option_type2 == BarrierOptionType.DOWNANDOUT:
+            elif barrier_option_type2 == BarrierOptionType.DOWNANDOUT:
                 payoff *= is_min_above_barrier2
-            elif self.barrier_option_type2 == BarrierOptionType.UPANDIN:
+            elif barrier_option_type2 == BarrierOptionType.UPANDIN:
                 payoff *= (1 - is_max_below_barrier2)
-            elif self.barrier_option_type2 == BarrierOptionType.DOWNANDIN:
+            elif barrier_option_type2 == BarrierOptionType.DOWNANDIN:
                 payoff *= (1 - is_min_above_barrier2)
 
         return payoff
+
+    def compute_payoff_without_brownian_bridge(self, paths, model):
+        return BarrierOption._compute_payoff_without_brownian_bridge_from_payload(
+            paths=paths,
+            strike=self.strike,
+            option_type=self.option_type,
+            barrier1=self.barrier1,
+            barrier_option_type1=self.barrier_option_type1,
+            barrier2=self.barrier2,
+            barrier_option_type2=self.barrier_option_type2,
+        )
         
-    def compute_payoff_with_brownian_bridge(self, spots, model):
+    @staticmethod
+    def _compute_payoff_with_brownian_bridge_from_payload(
+        spots: torch.Tensor,
+        model,
+        maturity: torch.Tensor,
+        strike: torch.Tensor,
+        option_type: OptionType,
+        barrier1: torch.Tensor,
+        barrier_option_type1: BarrierOptionType,
+        rng: np.random.Generator,
+        barrier2: torch.Tensor | None = None,
+        barrier_option_type2: BarrierOptionType | None = None,
+    ) -> torch.Tensor:
         sigma = model.get_volatility()
         spots_at_maturity = spots[:,-1]
         max_spot = torch.max(spots, dim=1).values  # Max spot across each path
@@ -105,45 +155,49 @@ class BarrierOption(Product):
         num_spots = spots.shape[1]
 
         # Precompute Brownian bridge crossing probabilities
-        log_spot_barrier = torch.log(spots / self.barrier1)
-        log_spot_barrier_next = torch.log(spots[:, 1:] / self.barrier1)
-        bridge_probs = torch.exp(-2 * log_spot_barrier[:, :-1] * log_spot_barrier_next / (sigma **2 * (self.maturity / num_spots)))
+        log_spot_barrier = torch.log(spots / barrier1)
+        log_spot_barrier_next = torch.log(spots[:, 1:] / barrier1)
+        bridge_probs = torch.exp(-2 * log_spot_barrier[:, :-1] * log_spot_barrier_next / (sigma **2 * (maturity / num_spots)))
 
-        is_max_below_barrier = compute_degree_of_truth(self.barrier1-max_spot,True)
-        is_min_above_barrier = compute_degree_of_truth(min_spot - self.barrier1,True)
+        is_max_below_barrier = compute_degree_of_truth(barrier1 - max_spot, True)
+        is_min_above_barrier = compute_degree_of_truth(min_spot - barrier1, True)
 
         zero=torch.tensor([0.0], device=device)
 
-        vanilla_payoff = torch.maximum(spots_at_maturity - self.strike, zero) if self.option_type == OptionType.CALL else torch.maximum(self.strike - spots_at_maturity, zero)
+        vanilla_payoff = (
+            torch.maximum(spots_at_maturity - strike, zero)
+            if option_type == OptionType.CALL
+            else torch.maximum(strike - spots_at_maturity, zero)
+        )
 
         # One draw per interval (barrier 1)
-        rdns = self.rng.uniform(0, 1, size=bridge_probs.shape)
+        rdns = rng.uniform(0, 1, size=bridge_probs.shape)
         rdns = torch.tensor(rdns, dtype=bridge_probs.dtype, device=bridge_probs.device)
         hit_probs1 = compute_degree_of_truth(bridge_probs - rdns,True)
         hit_barrier1 = 1 - torch.prod(1 - hit_probs1, dim=1)
 
-        if self.barrier_option_type1 == BarrierOptionType.UPANDOUT:
+        if barrier_option_type1 == BarrierOptionType.UPANDOUT:
             payoff = vanilla_payoff * is_max_below_barrier * (1-hit_barrier1)
 
-        elif self.barrier_option_type1 == BarrierOptionType.DOWNANDOUT:
+        elif barrier_option_type1 == BarrierOptionType.DOWNANDOUT:
             payoff = vanilla_payoff * is_min_above_barrier * (1-hit_barrier1)
 
-        elif self.barrier_option_type1 == BarrierOptionType.UPANDIN:
+        elif barrier_option_type1 == BarrierOptionType.UPANDIN:
             payoff = vanilla_payoff * (1-is_max_below_barrier)* hit_barrier1
 
-        elif self.barrier_option_type1 == BarrierOptionType.DOWNANDIN:
+        elif barrier_option_type1 == BarrierOptionType.DOWNANDIN:
             payoff = vanilla_payoff * (1-is_min_above_barrier)* hit_barrier1
 
         else:
-            raise NotImplementedError(f"Barrier type {self.barrier_option_type1} not supported.")
+            raise NotImplementedError(f"Barrier type {barrier_option_type1} not supported.")
         
-        if self.barrier2 is not None and self.barrier_option_type2 is not None:
-            log_spot_barrier2 = torch.log(spots / self.barrier2)
-            log_spot_barrier2_next = torch.log(spots[:, 1:] / self.barrier2)
-            bridge_probs2 = torch.exp(-2 * log_spot_barrier2[:, :-1] * log_spot_barrier2_next / (sigma**2 * (self.maturity / num_spots)))
+        if barrier2 is not None and barrier_option_type2 is not None:
+            log_spot_barrier2 = torch.log(spots / barrier2)
+            log_spot_barrier2_next = torch.log(spots[:, 1:] / barrier2)
+            bridge_probs2 = torch.exp(-2 * log_spot_barrier2[:, :-1] * log_spot_barrier2_next / (sigma**2 * (maturity / num_spots)))
 
             # One draw per interval (barrier 2)
-            rdns2 = self.rng.uniform(0, 1, size=bridge_probs2.shape)
+            rdns2 = rng.uniform(0, 1, size=bridge_probs2.shape)
             rdns2 = torch.tensor(rdns2, dtype=bridge_probs2.dtype, device=bridge_probs2.device)
             hit_probs2 = compute_degree_of_truth(bridge_probs2 - rdns2, True)
             hit_barrier2 = 1 - torch.prod(1 - hit_probs2, dim=1)
@@ -151,21 +205,35 @@ class BarrierOption(Product):
             max_spot = torch.max(spots, dim=1).values
             min_spot = torch.min(spots, dim=1).values
 
-            is_max_below_barrier2 = compute_degree_of_truth(self.barrier2 - max_spot, True)
-            is_min_above_barrier2 = compute_degree_of_truth(min_spot - self.barrier2, True)
+            is_max_below_barrier2 = compute_degree_of_truth(barrier2 - max_spot, True)
+            is_min_above_barrier2 = compute_degree_of_truth(min_spot - barrier2, True)
 
-            if self.barrier_option_type2 == BarrierOptionType.UPANDOUT:
+            if barrier_option_type2 == BarrierOptionType.UPANDOUT:
                 payoff *= is_max_below_barrier2 * (1 - hit_barrier2)
-            elif self.barrier_option_type2 == BarrierOptionType.DOWNANDOUT:
+            elif barrier_option_type2 == BarrierOptionType.DOWNANDOUT:
                 payoff *= is_min_above_barrier2 * (1 - hit_barrier2)
-            elif self.barrier_option_type2 == BarrierOptionType.UPANDIN:
+            elif barrier_option_type2 == BarrierOptionType.UPANDIN:
                 payoff *= (1 - is_max_below_barrier2) * hit_barrier2
-            elif self.barrier_option_type2 == BarrierOptionType.DOWNANDIN:
+            elif barrier_option_type2 == BarrierOptionType.DOWNANDIN:
                 payoff *= (1 - is_min_above_barrier2) * hit_barrier2
             else:
-                raise NotImplementedError(f"Barrier type {self.barrier_option_type2} not supported.")
+                raise NotImplementedError(f"Barrier type {barrier_option_type2} not supported.")
 
         return payoff
+
+    def compute_payoff_with_brownian_bridge(self, spots, model):
+        return BarrierOption._compute_payoff_with_brownian_bridge_from_payload(
+            spots=spots,
+            model=model,
+            maturity=self.maturity,
+            strike=self.strike,
+            option_type=self.option_type,
+            barrier1=self.barrier1,
+            barrier_option_type1=self.barrier_option_type1,
+            rng=self.rng,
+            barrier2=self.barrier2,
+            barrier_option_type2=self.barrier_option_type2,
+        )
 
             
     def payoff(self, spots, model):
@@ -173,7 +241,6 @@ class BarrierOption(Product):
                 return self.compute_payoff_with_brownian_bridge(spots, model)
             else:
                 return self.compute_payoff_without_brownian_bridge(spots, model)
-
 
     def compute_pv_analytically(self, model):
             S=model.get_spot()
@@ -235,20 +302,13 @@ class BarrierOption(Product):
 
     
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None, state=None):
-        spots: list[torch.Tensor] = []
-        for idx in range(len(self.modeling_timeline)):
-            spots.append(
-                self.get_resolved_atomic_request(
-                    resolved_atomic_requests=resolved_requests[0],
-                    request_type=AtomicRequestType.SPOT,
-                    time_idx=idx,
-                    asset_id=self.get_asset_id(),
-                )
-            )
-        spots=torch.stack(spots, dim=1)
-        cfs = self.payoff(spots,model)
-
-        numeraire=resolved_requests[0][self.numeraire_requests[len(self.product_timeline)-1].handle]
-        normalized_cfs=cfs/numeraire
-
-        return state, normalized_cfs.unsqueeze(1)
+        monitored_paths = torch.stack(
+            [
+                resolved_requests[0][self.spot_requests[(idx, self.get_asset_id())].handle]
+                for idx in range(len(self.modeling_timeline))
+            ],
+            dim=1,
+        )
+        numeraire = resolved_requests[0][self.numeraire_requests[len(self.product_timeline)-1].handle]
+        normalized = self.payoff(monitored_paths, model) / numeraire
+        return state, normalized.unsqueeze(1)

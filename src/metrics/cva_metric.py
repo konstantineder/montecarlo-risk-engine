@@ -16,6 +16,9 @@ class CVAMetric(Metric):
         
     def get_counterparty_ids(self) -> list[str] | None:
         return [self.counterparty_id]
+
+    def get_name(self) -> str:
+        return f"cva[{self.counterparty_id}]"
         
     def set_requests(self, exposure_timeline: np.ndarray) -> None:
         for idx in range(len(exposure_timeline)-1):

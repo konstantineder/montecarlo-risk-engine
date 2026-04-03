@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.heston import HestonModel
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -46,14 +47,15 @@ def run_point(init_params, S0, T, r, K, paths, steps, scheme, differentiate=Fals
 
     underlying = Equity()
     product = EuropeanOption(underlying=underlying, exercise_date=T, strike=K, option_type=OptionType.CALL)
+    netting_set = NettingSet(name=product.get_name(), products=[product])
 
-    portfolio = [product]
-    risk_metrics = RiskMetrics(metrics=[PVMetric()])
+    pv_metric = PVMetric()
+    risk_metrics = RiskMetrics(metrics=[pv_metric])
 
     p_an = _f(product.compute_pv_analytically_heston(model))
 
     sc = SimulationController(
-        portfolio=portfolio,
+        netting_sets=[netting_set],
         model=model,
         risk_metrics=risk_metrics,
         num_paths_mainsim=paths,
@@ -63,13 +65,23 @@ def run_point(init_params, S0, T, r, K, paths, steps, scheme, differentiate=Fals
         differentiate=differentiate,
     )
     res = sc.run_simulation()
-    p_sim = _f(res.get_results(0, 0)[0])
-    mc = _f(res.get_mc_error(0, 0)[0])
+    p_sim = _f(res.get_results(netting_set.get_name(), pv_metric.get_name(), evaluation_idx=0))
+    mc = _f(res.get_mc_error(netting_set.get_name(), pv_metric.get_name(), evaluation_idx=0))
 
     out = {"price_an": p_an, "price_sim": p_sim, "mc_error": mc}
     if differentiate:
-        greeks = res.get_derivatives(0, 0)[0]
-        out.update({"Delta": _f(greeks[0]), "Vega": _f(greeks[1]), "Rho": _f(greeks[2])})
+        greeks = res.get_derivatives(
+            netting_set.get_name(),
+            pv_metric.get_name(),
+            evaluation_idx=0,
+        )
+        out.update(
+            {
+                "Delta": _f(greeks["spot"]),
+                "Vega": _f(greeks["volatility"]),
+                "Rho": _f(greeks["rate"]),
+            }
+        )
     return out
 
 def run_grid(init_params, grid, paths, steps, scheme):

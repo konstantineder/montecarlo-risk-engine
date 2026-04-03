@@ -27,6 +27,10 @@ class Model:
     
     def get_model_params(self):
         return self.model_params
+
+    def get_model_param_names(self) -> list[str]:
+        num_params = len(self.model_params)
+        return [f"param_{idx}" for idx in range(num_params)]
     
     def set_model_params(self, params: torch.Tensor):
         self._params = params 

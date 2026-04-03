@@ -5,6 +5,7 @@ import numpy as np
 from common.packages import *
 from common.enums import SimulationScheme
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.vasicek import VasicekModel
 from models.cirpp import CIRPPModel
 from models.model_config import ModelConfig
@@ -78,7 +79,7 @@ def test_cva_corporate_bond(hazards):
         fixed_rate=0.0,
         asset_id="bond"
     )
-    portfolio=[zero_bond]
+    netting_sets = [NettingSet(name=zero_bond.get_name(), products=[zero_bond], counterparty_id=counterparty_id)]
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, maturity,100)
@@ -89,7 +90,7 @@ def test_cva_corporate_bond(hazards):
     num_paths_presim=100000
     num_steps=10
     sc=SimulationController(
-        portfolio=portfolio, 
+        netting_sets=netting_sets,
         model=model_config, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths_mainsim, 
@@ -101,7 +102,7 @@ def test_cva_corporate_bond(hazards):
 
     sim_results=sc.run_simulation()
 
-    cva_bond=sim_results.get_results(0,0)[0]
+    cva_bond=sim_results.get_results(zero_bond.get_name(), cva_metric.get_name(), evaluation_idx=0)
     
     pv_bond = interest_rate_model.compute_bond_price(0.0, maturity, 0.03)
     survival_prob = intensity_model.survival_probability(0.0, maturity, 0.0001)
@@ -157,7 +158,7 @@ def test_cva_wwr_payer_swap(hazards):
         irs_type=IRSType.PAYER,
         asset_id="irs"
     )
-    portfolio=[irs]
+    netting_sets = [NettingSet(name=irs.get_name(), products=[irs], counterparty_id=counterparty_id)]
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, maturity,100)
@@ -169,11 +170,20 @@ def test_cva_wwr_payer_swap(hazards):
     num_paths_mainsim=100000
     num_paths_presim=100000
     num_steps=10
-    sc=SimulationController(portfolio, model_config, risk_metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.EULER, False)
+    sc = SimulationController(
+        netting_sets=netting_sets,
+        model=model_config,
+        risk_metrics=risk_metrics,
+        num_paths_mainsim=num_paths_mainsim,
+        num_paths_presim=num_paths_presim,
+        num_steps=num_steps,
+        simulation_scheme=SimulationScheme.EULER,
+        differentiate=False,
+    )
     sim_results=sc.run_simulation()
 
-    cva_irs=sim_results.get_results(0,0)[0]
-    cva_irs_error=sim_results.get_mc_error(0,0)[0]
+    cva_irs=sim_results.get_results(irs.get_name(), cva_metric.get_name(), evaluation_idx=0)
+    cva_irs_error=sim_results.get_mc_error(irs.get_name(), cva_metric.get_name(), evaluation_idx=0)
 
     cva_uncorr=1.114576156484541  # from test without WWR
     cva_uncorr_error=0.0024446898428056294  # MC error from test without WWR

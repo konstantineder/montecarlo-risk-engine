@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import Sequence, List, Optional, Dict, Any
 from models.model import Model
 from models.black_scholes import BlackScholesModel
+from models.black_scholes_multi import BlackScholesMulti
 from models.heston import HestonModel
 from models.vasicek import VasicekModel
 from products.bond import Bond
@@ -26,7 +27,10 @@ class EuropeanOption(Product):
         asset_id       : str | None = None,
     ):
         
-        super().__init__(asset_ids=[asset_id])
+        super().__init__(
+            asset_ids=[asset_id],
+            product_family=ProductFamily.VANILLA_TERMINAL_OPTION,
+        )
         self.exercise_date = torch.tensor([exercise_date], dtype=FLOAT,device=device)
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.option_type = option_type
@@ -58,34 +62,87 @@ class EuropeanOption(Product):
         regression_function: RegressionFunction | None = None, 
         state: torch.Tensor | None = None,
     ):
-        
-        spots=resolved_requests[1][self.underlying_requests[time_idx].get_handle()]
-        cfs = self.payoff(spots,model)
+        spots = resolved_requests[1][self.underlying_requests[0].get_handle()]
+        numeraire = resolved_requests[0][self.numeraire_requests[0].handle]
+        normalized = self.payoff(spots, model) / numeraire
+        return state, normalized.unsqueeze(1)
 
-        numeraire=self.get_resolved_atomic_request(
-            resolved_atomic_requests=resolved_requests[0],
-            request_type=AtomicRequestType.NUMERAIRE,
-            time_idx=time_idx,
-        )
-        
-        normalized_cfs=cfs/numeraire
-
-        return state, normalized_cfs.unsqueeze(1)
-
-    def compute_pv_analytically(self, model: BlackScholesModel):
+    def _get_black_scholes_spot_and_volatility(
+        self,
+        model: BlackScholesModel | BlackScholesMulti,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         spot = model.get_spot()
-        rate = model.get_rate()
         sigma = model.get_volatility()
 
-        d1 = (torch.log(spot / self.strike) + (rate + 0.5 * sigma ** 2) * self.exercise_date) / (sigma * torch.sqrt(self.exercise_date))
-        d2 = d1 - sigma * torch.sqrt(self.exercise_date)
+        if spot.numel() > 1 or sigma.numel() > 1:
+            asset_id = self.get_asset_id()
+            if asset_id not in model.asset_ids:
+                raise ValueError(
+                    f"Asset id '{asset_id}' not found in model asset ids {model.asset_ids}."
+                )
+            asset_idx = model.asset_ids.index(asset_id)
+            spot = spot.reshape(-1)[asset_idx : asset_idx + 1]
+            sigma = sigma.reshape(-1)[asset_idx : asset_idx + 1]
+        return spot, sigma
+
+    def _compute_black_scholes_price(
+        self,
+        spot: torch.Tensor,
+        rate: torch.Tensor,
+        sigma: torch.Tensor,
+        time_to_maturity: torch.Tensor,
+    ) -> torch.Tensor:
+        d1 = (
+            torch.log(spot / self.strike)
+            + (rate + 0.5 * sigma ** 2) * time_to_maturity
+        ) / (sigma * torch.sqrt(time_to_maturity))
+        d2 = d1 - sigma * torch.sqrt(time_to_maturity)
 
         norm = torch.distributions.Normal(0.0, 1.0)
 
         if self.option_type == OptionType.CALL:
-            return spot * norm.cdf(d1) - self.strike * torch.exp(-rate * self.exercise_date) * norm.cdf(d2)
-        else:
-            return self.strike * torch.exp(-rate * self.exercise_date) * norm.cdf(-d2) - spot * norm.cdf(-d1)
+            return spot * norm.cdf(d1) - self.strike * torch.exp(-rate * time_to_maturity) * norm.cdf(d2)
+        return self.strike * torch.exp(-rate * time_to_maturity) * norm.cdf(-d2) - spot * norm.cdf(-d1)
+
+    def compute_pv_analytically(self, model: BlackScholesModel | BlackScholesMulti):
+        spot, sigma = self._get_black_scholes_spot_and_volatility(model)
+        rate = model.get_rate()
+        return self._compute_black_scholes_price(
+            spot=spot,
+            rate=rate,
+            sigma=sigma,
+            time_to_maturity=self.exercise_date,
+        )
+
+    def supports_analytic_pv(self, model: Model) -> bool:
+        return isinstance(model, (BlackScholesModel, BlackScholesMulti))
+
+    def supports_analytic_exposure(self, model: Model) -> bool:
+        return isinstance(model, (BlackScholesModel, BlackScholesMulti))
+
+    def compute_discounted_exposure_analytically(
+        self,
+        exposure_time: torch.Tensor,
+        spot: torch.Tensor,
+        numeraire: torch.Tensor,
+        model: Model,
+    ) -> torch.Tensor:
+        if not self.supports_analytic_exposure(model):
+            raise TypeError("Analytical exposure is only implemented for Black-Scholes models.")
+
+        remaining_maturity = self.exercise_date - exposure_time
+        if float(remaining_maturity.item()) <= 0.0:
+            return torch.zeros_like(spot.reshape(-1))
+
+        _, sigma = self._get_black_scholes_spot_and_volatility(model)
+        rate = model.get_rate()
+        price = self._compute_black_scholes_price(
+            spot=spot.reshape(-1),
+            rate=rate,
+            sigma=sigma,
+            time_to_maturity=remaining_maturity,
+        )
+        return price / numeraire.reshape(-1)
         
     def compute_pv_analytically_heston(self, model: HestonModel):
         if not isinstance(model, HestonModel):

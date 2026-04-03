@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 from common.enums import SimulationScheme
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.heston import HestonModel
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -42,16 +43,26 @@ def compute_prices_for_grid(param_grid, num_paths, steps, init_heston_params):
         underlying=Equity()
         product = EuropeanOption(underlying=underlying,exercise_date=T,strike=strike,option_type=OptionType.CALL)
 
-        portfolio = [product]
-        metrics=[PVMetric()]
+        netting_set = NettingSet(name=product.get_name(), products=[product])
+        pv_metric = PVMetric()
+        metrics=[pv_metric]
         risk_metrics=RiskMetrics(metrics=metrics)
 
         price_analytical = product.compute_pv_analytically_heston(model)
 
-        sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.QE, differentiate=False)
+        sc = SimulationController(
+            netting_sets=[netting_set],
+            model=model,
+            risk_metrics=risk_metrics,
+            num_paths_mainsim=num_paths,
+            num_paths_presim=0,
+            num_steps=steps,
+            simulation_scheme=SimulationScheme.QE,
+            differentiate=False,
+        )
 
         sim_results=sc.run_simulation()
-        price_sim=sim_results.get_results(0,0)
+        price_sim=sim_results.get_results(product.get_name(), pv_metric.get_name())
         error_sim = rel_err(price_sim, float(price_analytical))
 
         results.append({

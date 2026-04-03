@@ -6,6 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -45,15 +46,29 @@ if __name__ == "__main__":
             underlying =Equity('id')
             product = AmericanOption(underlying,T,10,strike,OptionType.PUT)
 
-            portfolio = [product]
-            risk_metrics=RiskMetrics(metrics=[PVMetric()])
+            netting_set = NettingSet(name=product.get_name(), products=[product])
+            pv_metric = PVMetric()
+            risk_metrics=RiskMetrics(metrics=[pv_metric])
             # Compute analytical price (if available)
 
-            sc=SimulationController(portfolio, model, risk_metrics, num_paths_main_sim, num_paths_pre_sim, steps, SimulationScheme.ANALYTICAL, True)
+            sc = SimulationController(
+                netting_sets=[netting_set],
+                model=model,
+                risk_metrics=risk_metrics,
+                num_paths_mainsim=num_paths_main_sim,
+                num_paths_presim=num_paths_pre_sim,
+                num_steps=steps,
+                simulation_scheme=SimulationScheme.ANALYTICAL,
+                differentiate=True,
+            )
 
             sim_results=sc.run_simulation()
-            price_sim=sim_results.get_results(0,0)
-            greeks=sim_results.get_derivatives(0,0)[0]
+            price_sim=sim_results.get_results(netting_set.get_name(), pv_metric.get_name())
+            greeks=sim_results.get_derivatives(
+                netting_set.get_name(),
+                pv_metric.get_name(),
+                evaluation_idx=0,
+            )
 
             results.append({
                 "spot": S0,
@@ -61,9 +76,9 @@ if __name__ == "__main__":
                 "rate": rate,
                 "time to maturity": T,
                 "price (sim)": price_sim[0],
-                "Delta": greeks[0],
-                "Vega": greeks[1],
-                "Rho": greeks[2],
+                "Delta": greeks["spot"],
+                "Vega": greeks["volatility"],
+                "Rho": greeks["rate"],
             })
 
         return pd.DataFrame(results)
@@ -95,14 +110,24 @@ if __name__ == "__main__":
         underlying =Equity('id')
         product_deriv = AmericanOption(underlying,1.0,10,100,OptionType.PUT)
 
-        portfolio = [product_deriv]
-        risk_metrics=RiskMetrics(metrics=[PVMetric()])
+        netting_set = NettingSet(name=product_deriv.get_name(), products=[product_deriv])
+        pv_metric = PVMetric()
+        risk_metrics=RiskMetrics(metrics=[pv_metric])
 
 
-        sc=SimulationController(portfolio, model_deriv, risk_metrics, num_paths_main_sim, num_paths_pre_sim, steps, SimulationScheme.ANALYTICAL, True)
+        sc = SimulationController(
+            netting_sets=[netting_set],
+            model=model_deriv,
+            risk_metrics=risk_metrics,
+            num_paths_mainsim=num_paths_main_sim,
+            num_paths_presim=num_paths_pre_sim,
+            num_steps=steps,
+            simulation_scheme=SimulationScheme.ANALYTICAL,
+            differentiate=True,
+        )
 
         sim_results=sc.run_simulation()
-        pv=sim_results.get_results(0,0)[0]
+        pv=sim_results.get_results(netting_set.get_name(), pv_metric.get_name(), evaluation_idx=0)
         
         return pv
 

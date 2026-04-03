@@ -25,11 +25,12 @@ The engine supports equity, interest-rate, credit, and hybrid models, along with
 - **PFE** – Potential Future Exposure  
 - **xVA** – currently **CVA**, with extension points for DVA / FVA / MVA / KVA  
 
-All metrics are computed via Monte Carlo and return **both the estimate and its Monte Carlo standard error**.
+Metrics are available at the **product** and **netting-set** level, including collateralized exposure profiles with margin period of risk (MPoR) handling. Where closed-form evaluation is available for a given product/model pair, the engine can also use **analytical metric evaluation** instead of Monte Carlo.
 
 ### Sensitivities & AAD
 
 - Efficient, scalable **adjoint algorithmic differentiation (AAD)** via [PyTorch](https://pytorch.org/)  
+- **First- and second-order sensitivities** for supported products, including Hessian-style outputs from `SimulationResults`
 - Payoff smoothing using fuzzy-logic techniques to enable AAD for discontinuous payoffs
   (binary options, barrier options, early-exercise structures)
 - CPU-ready design for large-scale simulations
@@ -41,6 +42,7 @@ All metrics are computed via Monte Carlo and return **both the estimate and its 
 - Bermudan swaptions  
 - American options  
 - FlexiCalls  
+- Asian options  
 - Binary options  
 - Barrier options  
 - Basket / multi-asset options  
@@ -56,6 +58,8 @@ All metrics are computed via Monte Carlo and return **both the estimate and its 
 - **Interest Rates**
   - Vasicek
   - Hull–White
+- **Commodity models**
+  - Schwartz-Two-Factor
 - **Credit**
   - Shifted Cox–Ingersoll–Ross (**CIR++**) with bootstrapped hazard curves from CDS spreads
 - **Hybrid ModelConfig**
@@ -77,6 +81,10 @@ All metrics are computed via Monte Carlo and return **both the estimate and its 
 
 - **Exposure & Regression Engine**  
   Supports Longstaff–Schwartz regression for continuation values and exposure estimation.
+
+- **Netting Sets & Collateralization**  
+  Aggregates products into netting sets, supports collateralized and uncollateralized exposure calculations,
+  and evaluates delayed collateral posting via MPoR-aware timelines.
 
 - **Request/Response Interface**  
   Models expose quantities (discount factors, survival probabilities, forward rates, etc.) via
@@ -106,6 +114,14 @@ Present value and corresponding sensitivities for various spots and maturities:
 Expected and potential future exposure for a bermudan swaption:
 
 ![Exposure profiles](docs/img/exposure_bermudan_swaption.png)
+
+---
+
+### Collateralized Exposure
+
+Collateralized and uncollateralized exposure profiles can be compared at the netting-set level, including CSA-style delayed collateral effects via MPoR:
+
+![Collateralized swap exposure](tests/plots/exposure_tests/exposure_swap_collateralized.png)
 
 ---
 
@@ -179,7 +195,7 @@ These notebooks serve both as **tutorials** and as **technical deep dives**, and
 - [ ] Extend the request interface to support composite requests  
 - [ ] Add **Libor Market Model (LMM)**  
 - [ ] Add **Merton** jump-diffusion model  
-- [ ] Introduce netting sets and collateralization (CSA, margining)  
+- [x] Introduce netting sets and collateralization (CSA, margining)  
 - [ ] Extend xVA stack (DVA, FVA, MVA, KVA)
 
 ---

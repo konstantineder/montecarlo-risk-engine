@@ -6,6 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.black_scholes import *
 from metrics.eepe_metric import *
 from metrics.risk_metrics import RiskMetrics
@@ -45,17 +46,31 @@ if __name__ == "__main__":
             underlying = Equity("id")
             product = EuropeanOption(underlying=underlying,exercise_date=T,strike=strike,option_type=OptionType.CALL)
 
-            portfolio = [product]
-            metrics=[EEPEMetric()]
+            netting_set = NettingSet(name="eepe_option_ns", products=[product])
+            eepe_metric = EEPEMetric()
+            metrics=[eepe_metric]
 
             exposure_timeline = np.linspace(0, T,10)
             risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
 
-            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 1000, steps, SimulationScheme.ANALYTICAL, True)
+            sc=SimulationController(
+                netting_sets=[netting_set],
+                model=model,
+                risk_metrics=risk_metrics,
+                num_paths_mainsim=num_paths,
+                num_paths_presim=1000,
+                num_steps=steps,
+                simulation_scheme=SimulationScheme.ANALYTICAL,
+                differentiate=True,
+            )
 
             sim_results=sc.run_simulation()
-            price_sim=sim_results.get_results(0,0)[0]
-            greeks=sim_results.get_derivatives(0,0)[0]
+            price_sim=sim_results.get_results(netting_set.get_name(), eepe_metric.get_name(), evaluation_idx=0)
+            greeks=sim_results.get_derivatives(
+                netting_set.get_name(),
+                eepe_metric.get_name(),
+                evaluation_idx=0,
+            )
 
             results.append({
                 "spot": S0,
@@ -63,9 +78,9 @@ if __name__ == "__main__":
                 "rate": rate,
                 "time to maturity": T,
                 "price (sim)": price_sim,
-                "Delta": greeks[0],
-                "Vega": greeks[1],
-                "Rho": greeks[2],
+                "Delta": greeks["spot"],
+                "Vega": greeks["volatility"],
+                "Rho": greeks["rate"],
             })
 
         return pd.DataFrame(results)
@@ -96,16 +111,26 @@ if __name__ == "__main__":
         underlying = Equity("id")
         product_deriv = EuropeanOption(underlying=underlying,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
 
-        portfolio = [product_deriv]
-        metrics=[EEPEMetric()]
+        netting_set = NettingSet(name="eepe_option_ns", products=[product_deriv])
+        eepe_metric = EEPEMetric()
+        metrics=[eepe_metric]
         
         exposure_timeline = np.linspace(0.0, 2.0,10)
         risk_metrics=RiskMetrics(metrics=metrics, exposure_timeline=exposure_timeline)
     
 
-        sc=SimulationController(portfolio, model_deriv, risk_metrics, num_paths, 1000, steps, SimulationScheme.ANALYTICAL, False)
+        sc=SimulationController(
+            netting_sets=[netting_set],
+            model=model_deriv,
+            risk_metrics=risk_metrics,
+            num_paths_mainsim=num_paths,
+            num_paths_presim=1000,
+            num_steps=steps,
+            simulation_scheme=SimulationScheme.ANALYTICAL,
+            differentiate=False,
+        )
         sim_results=sc.run_simulation()
-        eepe=sim_results.get_results(0,0)[0]
+        eepe=sim_results.get_results(netting_set.get_name(), eepe_metric.get_name(), evaluation_idx=0)
         
         return eepe
 

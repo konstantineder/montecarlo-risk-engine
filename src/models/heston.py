@@ -78,6 +78,9 @@ class HestonModel(Model):
     
     def get_initial_variance(self):
         return torch.stack([self.model_params[6]])
+
+    def get_model_param_names(self) -> list[str]:
+        return ["spot", "volatility", "rate", "rho", "kappa", "theta", "initial_variance"]
     
     def _get_correlation_matrix(self, simulation_scheme: SimulationScheme) -> torch.Tensor:
         """Compute covrrelation_matrix."""

@@ -5,19 +5,19 @@ from collections import defaultdict
 
 # Enum for metric types 
 class MetricType(Enum):
-    PV = 0
-    CE = 1
-    EPE = 2
-    ENE = 3
-    PFE = 4
-    EEPE = 5
-    CVA = 6
+    PV = "Present Value"
+    CE = "Current Exposure"
+    EPE = "Expected Positive Exposure"
+    ENE = "Expected Negative Exposure"
+    PFE = "Potential Future Exposure"
+    EEPE = "Effective Expected Positive Exposure"
+    CVA = "Credit Valuation Adjustment"
 
 class Metric:
     """Base metric class to be overwritten by all spectific metric implementations."""
     class EvaluationType(Enum):
-         ANALYTICAL=0
-         NUMERICAL=1
+         ANALYTICAL = "Analytical"
+         NUMERICAL = "Numerical"
 
     def __init__(self, metric_type, evaluation_type):
         self.metric_type=metric_type
@@ -43,6 +43,9 @@ class Metric:
     
     def get_counterparty_ids(self) -> list[str] | None:
         return None
+
+    def get_name(self) -> str:
+        return self.metric_type.name.lower()
 
     def evaluate_analytically(self, **kwargs):
         raise NotImplementedError("Analytical evaluation not implemented.")

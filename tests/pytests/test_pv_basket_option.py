@@ -5,6 +5,7 @@ import numpy as np
 from common.packages import device
 from common.enums import SimulationScheme
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.black_scholes_multi import BlackScholesMulti
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -33,18 +34,24 @@ def test_pv_basket_option():
     model=BlackScholesMulti(0.0,rate,asset_ids,spots,sigmas,correlation_matrix)
     weights=[0.25,0.25,0.25,0.25]
     basket=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.ARITHMETIC,True)
+    basket.name = "basket_arithmetic"
     basket_geo=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
+    basket_geo.name = "basket_geometric"
 
-    portfolio=[basket,basket_geo]
+    netting_sets = [
+        NettingSet(name=basket.get_name(), products=[basket]),
+        NettingSet(name=basket_geo.get_name(), products=[basket_geo]),
+    ]
 
-    metrics = [PVMetric()]
+    pv_metric = PVMetric()
+    metrics = [pv_metric]
     risk_metrics=RiskMetrics(metrics=metrics)
 
     num_paths = 1000000
     steps = 1
 
     sc=SimulationController(
-        portfolio=portfolio, 
+        netting_sets=netting_sets,
         model=model, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths, 
@@ -55,8 +62,8 @@ def test_pv_basket_option():
     )
     
     sim_results=sc.run_simulation()
-    price_basket=sim_results.get_results(0,0)[0]
-    price_geo=sim_results.get_results(1,0)[0]
+    price_basket=sim_results.get_results(basket.get_name(), pv_metric.get_name(), evaluation_idx=0)
+    price_geo=sim_results.get_results(basket_geo.get_name(), pv_metric.get_name(), evaluation_idx=0)
     analytical_price=basket_geo.compute_pv_analytically(model).item()
     
     precision = 0.02

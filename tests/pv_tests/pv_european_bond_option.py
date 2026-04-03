@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.vasicek import VasicekModel
 from metrics.pv_metric import PVMetric
 from metrics.risk_metrics import RiskMetrics
@@ -44,18 +45,32 @@ if __name__ == "__main__":
             #product = BinaryOption(T,strike,10,OptionType.CALL)
             underlying=Bond(startdate=0.0,maturity=2.0,notional=1.0,tenor=2.0, pays_notional=True, fixed_rate=0.0)
             product = EuropeanOption(underlying=underlying,exercise_date=T,strike=strike,option_type=OptionType.CALL)
-            #portfolio=[BarrierOption(strike, 120,BarrierOptionType.UPANDOUT,0,T,OptionType.CALL,True,10)]
-            portfolio = [product]
-            risk_metrics=RiskMetrics(metrics=[PVMetric()])
+            netting_set = NettingSet(name=product.get_name(), products=[product])
+            pv_metric = PVMetric()
+            risk_metrics=RiskMetrics(metrics=[pv_metric])
             # Compute analytical price (if available)
             price_analytical = product.compute_pv_bond_option_analytically(model)
             RegressionFunction=PolyomialRegression(degree=3)
 
-            sc=SimulationController(portfolio, model, risk_metrics, num_paths, 0, steps, SimulationScheme.EULER, True,RegressionFunction)
+            sc = SimulationController(
+                netting_sets=[netting_set],
+                model=model,
+                risk_metrics=risk_metrics,
+                num_paths_mainsim=num_paths,
+                num_paths_presim=0,
+                num_steps=steps,
+                simulation_scheme=SimulationScheme.EULER,
+                differentiate=True,
+                regression_function=RegressionFunction,
+            )
 
             sim_results=sc.run_simulation()
-            price_sim=sim_results.get_results(0,0)
-            greeks=sim_results.get_derivatives(0,0)[0]
+            price_sim=sim_results.get_results(netting_set.get_name(), pv_metric.get_name())
+            greeks=sim_results.get_derivatives(
+                netting_set.get_name(),
+                pv_metric.get_name(),
+                evaluation_idx=0,
+            )
             error_sim = rel_err(price_sim[0], float(price_analytical[0]))
 
             results.append({
@@ -65,8 +80,8 @@ if __name__ == "__main__":
                 "price": price_analytical,
                 "price (sim)": price_sim[0],
                 "rel. error (sim)": error_sim,
-                "Rho": greeks[0],
-                "Vega": greeks[1],
+                "Rho": greeks["rate"],
+                "Vega": greeks["volatility"],
             })
 
         return pd.DataFrame(results)

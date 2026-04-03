@@ -9,6 +9,7 @@ from common.packages import *
 from common.enums import SimulationScheme
 import matplotlib.pyplot as plt
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.vasicek import VasicekModel
 from models.cirpp import CIRPPModel
 from models.model_config import ModelConfig
@@ -140,7 +141,7 @@ def compute_cva_zero_bond(correlation: float):
         fixed_rate=0.0,
         asset_id="bond"
     )
-    portfolio=[zero_bond]
+    netting_set = NettingSet(name="bond_cva_ns", products=[zero_bond], counterparty_id=counterparty_id)
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, maturity,100)
@@ -151,7 +152,7 @@ def compute_cva_zero_bond(correlation: float):
     num_paths_presim=100000
     num_steps=10
     sc=SimulationController(
-        portfolio=portfolio, 
+        netting_sets=[netting_set],
         model=model_config, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths_mainsim, 
@@ -163,12 +164,12 @@ def compute_cva_zero_bond(correlation: float):
 
     sim_results=sc.run_simulation()
 
-    cva_bond=sim_results.get_results(0,0)[0]
-    cva_bond_error=sim_results.get_mc_error(0,0)[0]
+    cva_bond=sim_results.get_results(netting_set.get_name(), cva_metric.get_name(), evaluation_idx=0)
+    cva_bond_error=sim_results.get_mc_error(netting_set.get_name(), cva_metric.get_name(), evaluation_idx=0)
     
     return (cva_bond, cva_bond_error)
-    
-correlations = np.linspace(-0.95, 0.95, 25)
+
+correlations = np.linspace(-0.95, 0.95, 2)
 
 cva_vals = []
 cva_errs = []
@@ -206,7 +207,4 @@ os.makedirs(out_dir, exist_ok=True)
 out_path = os.path.join(out_dir, "cva_bond.png")
 plt.savefig(out_path)
 print(f"Plot saved to {out_path}")
-
-
-
 

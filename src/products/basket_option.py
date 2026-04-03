@@ -24,7 +24,10 @@ class BasketOption(Product):
         use_variation_reduction: bool = False
     ):
         
-        super().__init__(asset_ids=asset_ids)
+        super().__init__(
+            asset_ids=asset_ids,
+            product_family=ProductFamily.BASKET_TERMINAL_PAYOFF,
+        )
         self.maturity = torch.tensor([maturity], dtype=FLOAT,device=device)
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.weights=torch.tensor(weights, dtype=FLOAT,device=device)
@@ -65,7 +68,7 @@ class BasketOption(Product):
                 return torch.maximum(basket - self.strike, zero)
             else:
                 return torch.maximum(self.strike - basket, zero)
-            
+
     def payoff_variation_reduction(self, spots, model):
         payoff_classical=self.compute_payoff(spots,self.basket_option_type)
         payoff_reduction=self.compute_payoff(spots,BasketOptionType.GEOMETRIC)
@@ -87,17 +90,15 @@ class BasketOption(Product):
 
         result = torch.stack(spots, dim=1)
         return result
-        
+
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None, state=None):
-        spots = self._get_spots_for_basket(resolved_requests,time_idx)
-        cfs = self.payoff(spots, model)
-        numeraire = self.get_resolved_atomic_request(
-            resolved_atomic_requests=resolved_requests[0],
-            request_type=AtomicRequestType.NUMERAIRE,
-            time_idx=time_idx,
+        spots = torch.stack(
+            [resolved_requests[0][self.spot_requests[(0, asset_id)].handle] for asset_id in self.asset_ids],
+            dim=1,
         )
-        normalized_cfs = cfs / numeraire
-        return state, normalized_cfs.unsqueeze(1)
+        numeraire = resolved_requests[0][self.numeraire_requests[0].handle]
+        normalized = self.payoff(spots, model) / numeraire
+        return state, normalized.unsqueeze(1)
 
     def compute_pv_analytically(self, model):
         # Assumes geometric basket under Black-Scholes

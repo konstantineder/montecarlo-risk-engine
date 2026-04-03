@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.vasicek import VasicekModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
@@ -24,7 +25,10 @@ if __name__ == "__main__":
 
     frn = Bond(startdate=0.0,maturity=maturity,notional=1.0,tenor=0.25,pays_notional=True)
     coupon_bond = Bond(startdate=0.0,maturity=maturity,notional=1.0,tenor=0.25,pays_notional=True, fixed_rate=0.3)
-    portfolio=[frn, coupon_bond]
+    frn.name = "frn"
+    coupon_bond.name = "coupon_bond"
+    netting_set_frn = NettingSet(name="frn_ns", products=[frn])
+    netting_set_coupon = NettingSet(name="coupon_bond_ns", products=[coupon_bond])
 
     # Metric timeline for EE
     exposure_timeline = np.linspace(0, 3.,100)
@@ -39,7 +43,7 @@ if __name__ == "__main__":
     num_paths_presim=100000
     num_steps=50
     sc = SimulationController(
-        portfolio=portfolio, 
+        netting_sets=[netting_set_frn, netting_set_coupon],
         model=model, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths_mainsim, 
@@ -51,9 +55,9 @@ if __name__ == "__main__":
 
     sim_results=sc.run_simulation()
 
-    ees_cbond=sim_results.get_results(0,0)
-    ees_frn=sim_results.get_results(1,0)
-    pfes_cbond=sim_results.get_results(0,1)
+    ees_cbond=sim_results.get_results(netting_set_frn.get_name(), epe_metric.get_name())
+    ees_frn=sim_results.get_results(netting_set_coupon.get_name(), epe_metric.get_name())
+    pfes_cbond=sim_results.get_results(netting_set_frn.get_name(), pfe_metric.get_name())
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
 

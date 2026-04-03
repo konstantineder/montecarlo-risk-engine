@@ -46,6 +46,14 @@ class HullWhiteModel(Model):
         y2 = curve[idx + 1]
 
         return y1 + (y2 - y1) * (t - t1) / (t2 - t1)
+
+    def get_model_param_names(self) -> list[str]:
+        curve_names = [f"forward_curve[{idx}]" for idx in range(len(self.forward_curve))]
+        derivative_names = [
+            f"forward_curve_derivative[{idx}]"
+            for idx in range(len(self.forward_curve_derivative))
+        ]
+        return ["rate", "sigma", "mean_reversion", *curve_names, *derivative_names]
     
     def compute_theta(self, t):
         f_t = self.interpolate(t, self.forward_curve)
@@ -135,4 +143,3 @@ class HullWhiteModel(Model):
         elif req.request_type == AtomicRequestType.NUMERAIRE:
             log_B_t = state[1]
             return torch.exp(log_B_t)
-

@@ -38,6 +38,9 @@ class VasicekModel(Model):
     
     def get_mean_reversion_speed(self):
         return torch.stack([self.model_params[3]]) 
+
+    def get_model_param_names(self) -> list[str]:
+        return ["rate", "volatility", "mean", "mean_reversion_speed"]
     
     def get_state(self, num_paths: int) -> torch.Tensor:
         """Return initial state for all paths with shape (num_paths, 2)."""
@@ -101,12 +104,12 @@ class VasicekModel(Model):
         theta = self.get_mean()
         sigma = self.get_volatility()
 
-        log_B_t += r_t * delta_t
+        log_B_t_next = log_B_t + r_t * delta_t
         drift = a * (theta - r_t) * delta_t
         diffusion = sigma * torch.sqrt(delta_t) * corr_randn
         r_next = r_t + drift + diffusion
 
-        return torch.stack([r_next.squeeze(-1), log_B_t.squeeze(-1)], dim=-1)   
+        return torch.stack([r_next.squeeze(-1), log_B_t_next.squeeze(-1)], dim=-1)   
     
     def compute_bond_price(self, time1, time2, rate):
         """Use analytic formula for Zerobond price in Vasicek model."""

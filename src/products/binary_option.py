@@ -16,7 +16,10 @@ class BinaryOption(Product):
         asset_id      : str | None = None,
     ):
         
-        super().__init__(asset_ids=[asset_id])
+        super().__init__(
+            asset_ids=[asset_id],
+            product_family=ProductFamily.BINARY_TERMINAL_PAYOFF,
+        )
         self.maturity = torch.tensor([maturity], dtype=FLOAT,device=device)
         self.strike = torch.tensor([strike], dtype=FLOAT,device=device)
         self.option_type = option_type
@@ -54,20 +57,8 @@ class BinaryOption(Product):
     
     
     def compute_normalized_cashflows(self, time_idx, model, resolved_requests, regression_RegressionFunction=None,state=None):
-        spots=self.get_resolved_atomic_request(
-            resolved_atomic_requests=resolved_requests[0],
-            request_type=AtomicRequestType.SPOT,
-            time_idx=time_idx,
-            asset_id=self.get_asset_id()
-        )
-        cfs = self.payoff(spots,model)
-
-        numeraire=self.get_resolved_atomic_request(
-            resolved_atomic_requests=resolved_requests[0],
-            request_type=AtomicRequestType.NUMERAIRE,
-            time_idx=time_idx,
-        )
-        
-        normalized_cfs=cfs/numeraire
-
-        return state, normalized_cfs.unsqueeze(1)
+        asset_id = self.get_asset_id()
+        spots = resolved_requests[0][self.spot_requests[(0, asset_id)].handle]
+        numeraire = resolved_requests[0][self.numeraire_requests[0].handle]
+        normalized = self.payoff(spots, model) / numeraire
+        return state, normalized.unsqueeze(1)

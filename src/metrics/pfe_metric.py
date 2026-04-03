@@ -6,6 +6,9 @@ class PFEMetric(Metric):
     def __init__(self, quantile=0.95, evaluation_type=Metric.EvaluationType.NUMERICAL):
         super().__init__(metric_type=MetricType.PFE, evaluation_type=evaluation_type)
         self.quantile = quantile
+
+    def get_name(self) -> str:
+        return f"pfe[{self.quantile:g}]"
         
     def _compute_quantile_mc_error(self, sorted_values: torch.Tensor, q_index: int) -> torch.Tensor:
         """

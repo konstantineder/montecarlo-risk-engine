@@ -6,6 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product as cartesian_product
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.model_config import ModelConfig
 from models.black_scholes import BlackScholesModel
 from metrics.pv_metric import PVMetric
@@ -34,18 +35,24 @@ def test_basket_option_analytically():
     model=ModelConfig(models=models,inter_asset_correlation_matrix=inter_correlation_matrix)
     weights=[0.25,0.25,0.25,0.25]
     basket=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.ARITHMETIC,False)
+    basket.name = "basket_arithmetic"
     basket_geo=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
+    basket_geo.name = "basket_geometric"
 
-    portfolio=[basket,basket_geo]
+    netting_sets = [
+        NettingSet(name=basket.get_name(), products=[basket]),
+        NettingSet(name=basket_geo.get_name(), products=[basket_geo]),
+    ]
 
-    metrics = [PVMetric()]
+    pv_metric = PVMetric()
+    metrics = [pv_metric]
     risk_metrics=RiskMetrics(metrics=metrics)
 
     num_paths = 1000000
     steps = 1
 
     sc=SimulationController(
-        portfolio=portfolio, 
+        netting_sets=netting_sets,
         model=model, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths, 
@@ -56,8 +63,8 @@ def test_basket_option_analytically():
     )
     
     sim_results=sc.run_simulation()
-    price_basket=sim_results.get_results(0,0)[0]
-    price_geo=sim_results.get_results(1,0)[0]
+    price_basket=sim_results.get_results(basket.get_name(), pv_metric.get_name(), evaluation_idx=0)
+    price_geo=sim_results.get_results(basket_geo.get_name(), pv_metric.get_name(), evaluation_idx=0)
     
     precision = 0.02
     assert abs(price_basket - 12.60) < precision
@@ -83,18 +90,24 @@ def test_basket_option_euler():
     model=ModelConfig(models=models,inter_asset_correlation_matrix=inter_correlation_matrix)
     weights=[0.25,0.25,0.25,0.25]
     basket=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.ARITHMETIC,False)
+    basket.name = "basket_arithmetic"
     basket_geo=BasketOption(1.0,asset_ids,weights,100,OptionType.CALL,BasketOptionType.GEOMETRIC)
+    basket_geo.name = "basket_geometric"
 
-    portfolio=[basket,basket_geo]
+    netting_sets = [
+        NettingSet(name=basket.get_name(), products=[basket]),
+        NettingSet(name=basket_geo.get_name(), products=[basket_geo]),
+    ]
 
-    metrics = [PVMetric()]
+    pv_metric = PVMetric()
+    metrics = [pv_metric]
     risk_metrics=RiskMetrics(metrics=metrics)
 
     num_paths = 1000000
     steps = 50
 
     sc=SimulationController(
-        portfolio=portfolio, 
+        netting_sets=netting_sets,
         model=model, 
         risk_metrics=risk_metrics, 
         num_paths_mainsim=num_paths, 
@@ -105,8 +118,8 @@ def test_basket_option_euler():
     )
     
     sim_results=sc.run_simulation()
-    price_basket=sim_results.get_results(0,0)[0]
-    price_geo=sim_results.get_results(1,0)[0]
+    price_basket=sim_results.get_results(basket.get_name(), pv_metric.get_name(), evaluation_idx=0)
+    price_geo=sim_results.get_results(basket_geo.get_name(), pv_metric.get_name(), evaluation_idx=0)
     
     precision = 0.02
     assert abs(price_basket - 12.60) < precision

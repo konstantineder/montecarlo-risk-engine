@@ -34,6 +34,9 @@ class BlackScholesModel(Model):
 
     def get_rate(self):
         return torch.stack([self.model_params[2]])
+
+    def get_model_param_names(self) -> list[str]:
+        return ["spot", "volatility", "rate"]
     
     def get_state(self, num_paths: int):
         return self.get_spot().expand(num_paths).unsqueeze(-1).clone()

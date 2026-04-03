@@ -29,6 +29,7 @@ class CIRPPModel(Model):
         theta: float,
         volatility: float,
         y0: float,
+        deterministic: bool = False,
     ):
         super().__init__(
             calibration_date=calibration_date, 
@@ -47,6 +48,7 @@ class CIRPPModel(Model):
         
         self.tenors = torch.tensor(list(hazard_rates.keys()), dtype=FLOAT, device=device)
         self.hazard_rates = torch.tensor(list(hazard_rates.values()), dtype=FLOAT, device=device)
+        self.deterministic = deterministic
         
         self.cs_helper = CSHelper()
 
@@ -63,6 +65,9 @@ class CIRPPModel(Model):
     def get_y0(self):
         return torch.stack([self.model_params[3]])
 
+    def get_model_param_names(self) -> list[str]:
+        return ["kappa", "theta", "sigma", "y0"]
+
     # --------- Market intensity & initial survival S_m(0,t) ----------
     def _lambda_market(self, t: torch.Tensor) -> torch.Tensor:
         """
@@ -74,6 +79,13 @@ class CIRPPModel(Model):
                 return self.hazard_rates[idx]
         idx = len(self.tenors) - 1
         return self.hazard_rates[idx]
+
+    def _market_survival_probability(self, t: torch.Tensor) -> torch.Tensor:
+        return 1.0 - self.cs_helper.probability_of_default(
+            hazards=self.hazard_rates,
+            tenors=self.tenors,
+            date=torch.as_tensor(t, dtype=FLOAT, device=device),
+        )
 
     # --------- CIR++ shift ψ(t) = λ_m(t) + D(t) - y0 E(t)  ----------
     # h, A, B as in the paper (with T>t). :contentReference[oaicite:4]{index=4}
@@ -132,10 +144,32 @@ class CIRPPModel(Model):
     # --------- Model state, simulation ----------
     def get_state(self, num_paths: int):
         """Return initial state y0 expanded to num_paths."""
-        y0 = self.get_y0().expand(num_paths)
+        if self.deterministic:
+            y0 = self._lambda_market(self.calibration_date.squeeze()).expand(num_paths)
+        else:
+            y0 = self.get_y0().expand(num_paths)
         log_B0 = torch.zeros_like(y0, dtype=FLOAT, device=device)
         state = torch.stack([y0, log_B0], dim=-1) 
         return state
+
+    def _simulate_time_step_deterministically(
+        self,
+        time1: torch.Tensor,
+        time2: torch.Tensor,
+        state: torch.Tensor,
+    ) -> torch.Tensor:
+        delta_t = time2 - time1
+        intensity_t = self._lambda_market(time1.squeeze())
+        intensity_next = self._lambda_market(time2.squeeze())
+        log_B = state[:, 1:2]
+        log_B_next = log_B + intensity_t * delta_t
+        return torch.stack(
+            [
+                torch.ones_like(log_B_next.squeeze(-1)) * intensity_next,
+                log_B_next.squeeze(-1),
+            ],
+            dim=-1,
+        )
 
     def simulate_time_step_euler(
         self,
@@ -148,6 +182,9 @@ class CIRPPModel(Model):
         Euler–Maruyama (full-truncation) for CIR:
             y_{t+Δ} = y + κ(θ - y)+ σ sqrt(max(y,0)) sqrt(Δ) z
         """
+        if self.deterministic:
+            return self._simulate_time_step_deterministically(time1, time2, state)
+
         delta_t = time2 - time1
         kappa = self.get_kappa()
         theta = self.get_theta()
@@ -171,6 +208,9 @@ class CIRPPModel(Model):
         Proxy 'analytic' step via moment-matching lognormal proxy for y(t+dt).
         For production, you can swap to exact noncentral-χ² sampling for CIR. :contentReference[oaicite:6]{index=6}
         """
+        if self.deterministic:
+            return self._simulate_time_step_deterministically(time1, time2, state)
+
         # compute conditional mean/variance of CIR and sample via lognormal proxy
         delta_t = time2 - time1
         kappa = self.get_kappa().item()
@@ -199,6 +239,8 @@ class CIRPPModel(Model):
     # --------- Core quantities: λ(t), S(t,T), credit spread ----------
     def lambda_t(self, t: torch.Tensor, y_t: torch.Tensor) -> torch.Tensor:
         """Model intensity at time t: λ(t) = y(t) + ψ(t)."""
+        if self.deterministic:
+            return y_t
         return y_t + self.psi(t)
 
     def survival_probability(self, t: torch.Tensor, T: torch.Tensor, y_t: torch.Tensor) -> torch.Tensor:
@@ -209,6 +251,10 @@ class CIRPPModel(Model):
         """
         t = torch.as_tensor(t, dtype=FLOAT, device=device)
         T = torch.as_tensor(T, dtype=FLOAT, device=device)
+
+        if self.deterministic:
+            survival_ratio = self._market_survival_probability(T) / self._market_survival_probability(t)
+            return torch.ones_like(y_t, dtype=FLOAT, device=device) * survival_ratio
 
         # objects at (0,·)
         A0t = self._A(torch.tensor(0.0, dtype=FLOAT, device=device), t)

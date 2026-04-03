@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from controller.controller import SimulationController
+from products.netting_set import NettingSet
 from models.black_scholes import BlackScholesModel
 from metrics.pfe_metric import PFEMetric
 from metrics.epe_metric import EPEMetric
@@ -26,10 +27,11 @@ if __name__ == "__main__":
 
     underlying=Equity()
     
-    portfolio=[]
+    products=[]
     for _ in range(1000):
         product = EuropeanOption(underlying=underlying,exercise_date=2.0,strike=100,option_type=OptionType.CALL)
-        portfolio.append(product)
+        products.append(product)
+    netting_set = NettingSet(name="european_option_book", products=products)
 
 
     # Metric timeline for EE
@@ -43,12 +45,21 @@ if __name__ == "__main__":
     num_paths_mainsim=10000
     num_paths_presim=100000
     num_steps=1
-    sc=SimulationController(portfolio, model, risk_metrics, num_paths_mainsim, num_paths_presim, num_steps, SimulationScheme.ANALYTICAL, False)
+    sc=SimulationController(
+        netting_sets=[netting_set],
+        model=model,
+        risk_metrics=risk_metrics,
+        num_paths_mainsim=num_paths_mainsim,
+        num_paths_presim=num_paths_presim,
+        num_steps=num_steps,
+        simulation_scheme=SimulationScheme.ANALYTICAL,
+        differentiate=False,
+    )
 
     sim_results=sc.run_simulation()
 
-    ees=sim_results.get_results(0,0)
-    pfes=sim_results.get_results(0,1)
+    ees=sim_results.get_results(netting_set.get_name(), ee_metric.get_name())
+    pfes=sim_results.get_results(netting_set.get_name(), pfe_metric.get_name())
 
     plt.figure(figsize=(10, 6))
     plt.plot(exposure_timeline, ees, label='Expected Exposure (EE)', color='red')
