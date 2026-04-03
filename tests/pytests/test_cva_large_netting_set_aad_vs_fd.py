@@ -9,11 +9,11 @@ import numpy as np
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "exposure_tests"
-    / "cva_large_netting_set_surface.py"
+    / "cva_large_netting_set_derivatives.py"
 )
 
 _SPEC = importlib.util.spec_from_file_location(
-    "cva_large_netting_set_surface",
+    "cva_large_netting_set_derivatives",
     MODULE_PATH,
 )
 assert _SPEC is not None and _SPEC.loader is not None
