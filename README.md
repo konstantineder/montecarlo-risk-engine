@@ -121,7 +121,7 @@ Expected and potential future exposure for a bermudan swaption:
 
 Collateralized and uncollateralized exposure profiles can be compared at the netting-set level, including CSA-style delayed collateral effects via MPoR:
 
-![Collateralized swap exposure](tests/plots/exposure_tests/exposure_swap_collateralized.png)
+![Collateralized swap exposure](docs/img/exposure_swap_collateralized.png)
 
 ---
 
@@ -139,10 +139,6 @@ standard errors.
 ### Heston Model – Calibration, Pricing, and Sensitivities
 
 The Heston stochastic volatility model is calibrated to equity option data and used for pricing, risk, and convergence analysis.
-- Calibration recovers realistic skew and term structure, producing a smooth implied volatility surface
-
-![Calibrated Heston implied volatility surface](docs/img/heston_surface.png)
-
 - Pricing uses the Quadratic–Exponential (QE) scheme of Andersen (2007)
 - Fuzzy-logic smoothing is applied at the QE branching threshold to ensure numerical stability and full compatibility with pathwise AAD
 - Greeks (Delta, Vega) computed via AAD are validated against analytic finite differences
