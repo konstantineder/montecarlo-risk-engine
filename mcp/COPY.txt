@@ -1,0 +1,50 @@
+TQQQ book — local ChatGPT copy sheet
+Do not paste any of this into the website dialog "Add custom MCP server".
+That dialog wants a public https URL. This server has no URL, no port, and no OAuth.
+
+Replace REPO with the folder you cloned, for example
+/Users/you/dev/montecarlo-risk-engine
+
+1. Once, in Terminal
+
+cd REPO
+chmod +x mcp/run.sh
+
+The file ChatGPT starts is mcp/run.sh.
+Do not point it at src/tqqq_book/mcp_server.py. That file is a module.
+
+2. Copy this into ~/.codex/config.toml
+
+The ChatGPT desktop app reads this file. Restart the app after saving.
+Then type /mcp. tqqq-book should be listed.
+
+[mcp_servers.tqqq-book]
+command = "REPO/mcp/run.sh"
+
+3. Only if the desktop app shows Settings → MCP servers → Add server (STDIO)
+
+Name        tqqq-book
+Transport   STDIO
+Command     REPO/mcp/run.sh
+Arguments   leave blank
+
+Leave URL blank. Leave authentication blank. There is no OAuth.
+
+4. What not to type into the website form
+
+Name              not a python command
+Server URL        not a file path, and not https://example.com/mcp
+Authentication    not OAuth
+
+Marks are the analytic Black-Scholes price. Nothing is ordered.
+
+Tools: tqqq_book, tqqq_monte_carlo, tqqq_report.
+putDte and horizonDays are separate. Defaults are put DTE 180 and horizon 100.
+tqqq_report writes REPO/runs/tqqq-desk.html.
+
+One skill. Copy it once:
+
+mkdir -p ~/.codex/skills
+cp -R REPO/mcp/skill/tqqq-book ~/.codex/skills/
+
+Restart the desktop app. Then ask for the TQQQ book.

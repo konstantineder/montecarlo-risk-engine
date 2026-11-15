@@ -49,8 +49,8 @@ class BookConfig:
     new_put_otm: float = 0.02
     write_floor_after_monetize: float = 0.90
     stagger_min_spot_frac: float = 0.95
-    horizon_days: int = 90
-    put_dte: int = 90
+    horizon_days: int = 100
+    put_dte: int = 180
     paths: int = 400
     seed: int = 13
     strategy: str = "wheel"
@@ -252,6 +252,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
     peak = book["deployed"]
     max_dd = 0.0
     last_nav = 0.0
+    navs: list[float] = []
     strategy = cfg.strategy
 
     def settle(t: int, spot: float) -> None:
@@ -370,6 +371,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
             mark = _mark(leg, spot, t, cfg.rate, sigma)
             mtm += mark * leg.qty * CONTRACT if leg.side == "long" else -mark * leg.qty * CONTRACT
         last_nav = mtm
+        navs.append(last_nav)
         wealth = book["deployed"] + last_nav
         peak = max(peak, wealth)
         max_dd = max(max_dd, peak - wealth)
@@ -385,6 +387,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
         "buybacks": buybacks,
         "roll_cash": roll_cash,
         "floor_after": _floor(legs),
+        "nav": navs,
     }
 
 
@@ -409,20 +412,47 @@ def _summary(name: str, rows: list[dict]) -> dict:
     }
 
 
+def _ribbon(spots: np.ndarray, navs: np.ndarray) -> list[dict]:
+    rows = []
+    for day in range(spots.shape[1]):
+        spot = spots[:, day]
+        pnl = navs[:, day]
+        rows.append({
+            "day": day,
+            "spot_p05": float(np.quantile(spot, 0.05)),
+            "spot_p50": float(np.quantile(spot, 0.50)),
+            "spot_p95": float(np.quantile(spot, 0.95)),
+            "pnl_p05": float(np.quantile(pnl, 0.05)),
+            "pnl_p50": float(np.quantile(pnl, 0.50)),
+            "pnl_p95": float(np.quantile(pnl, 0.95)),
+        })
+    return rows
+
+
 def run(cfg: BookConfig | None = None) -> dict:
     cfg = cfg or BookConfig()
-    horizon = min(cfg.horizon_days, cfg.put_dte)
+    path_days = min(cfg.horizon_days, cfg.put_dte)
     book = build_book(cfg)
-    spots = _paths(cfg, horizon)
-    rows = [_simulate(spots[i], book, cfg) for i in range(cfg.paths)]
+    spots = _paths(cfg, path_days)
+    rows = []
+    navs = np.empty((cfg.paths, path_days + 1), dtype=float)
+    for i in range(cfg.paths):
+        stats = _simulate(spots[i], book, cfg)
+        navs[i] = stats["nav"]
+        stats.pop("nav")
+        rows.append(stats)
     call_lines = [
         {
             "tag": leg.tag,
+            "side": leg.side,
             "qty": leg.qty,
             "strike": leg.strike,
             "dte": leg.expiry,
+            "years": round(leg.expiry * DT, 4),
             "otm": round(leg.otm, 4),
             "premium": round(leg.entry, 4),
+            "priced_by": "BlackScholesModel analytic",
+            "days_left_at_horizon": max(0, leg.expiry - path_days),
         }
         for leg in book["legs"]
         if leg.kind == "call"
@@ -430,22 +460,34 @@ def run(cfg: BookConfig | None = None) -> dict:
     put_lines = [
         {
             "tag": leg.tag,
+            "side": leg.side,
             "qty": leg.qty,
             "strike": leg.strike,
             "dte": leg.expiry,
+            "years": round(leg.expiry * DT, 4),
             "premium": round(leg.entry, 4),
+            "priced_by": "BlackScholesModel analytic",
+            "days_left_at_horizon": max(0, leg.expiry - path_days),
         }
         for leg in book["legs"]
         if leg.kind == "put"
     ]
     return {
+        "note": (
+            "Opening premiums are this repo's analytic Black-Scholes at the opening spot, "
+            "IV, and each leg's own DTE. They are not the IBKR fill. "
+            "The path is shorter than the put when horizon_days < put_dte, so the put is still marked, not expired."
+        ),
         "config": {
             "lots": cfg.lots,
             "shares": book["shares"],
             "spot": cfg.spot,
             "put_dte": cfg.put_dte,
-            "horizon_days": horizon,
+            "horizon_days": cfg.horizon_days,
+            "path_days": path_days,
+            "put_days_left": max(0, cfg.put_dte - path_days),
             "iv": cfg.iv,
+            "rate": cfg.rate,
             "tqqq_vol": cfg.tqqq_vol,
             "qqq_mu": cfg.qqq_mu,
             "strategy": cfg.strategy,
@@ -463,23 +505,54 @@ def run(cfg: BookConfig | None = None) -> dict:
             "calls": call_lines,
         },
         "monte_carlo": _summary(cfg.strategy, rows),
+        "ribbon": _ribbon(spots, navs),
     }
 
 
-def _tenors_from_args(otm: str, contracts: str) -> tuple[Tenor, ...]:
-    otms = [float(part) for part in otm.split(",")]
-    qtys = [int(part) for part in contracts.split(",")]
-    if len(otms) != 4 or len(qtys) != 4:
-        raise SystemExit("Need four OTM values and four contract counts, for 1w, 2w, 3w, and 4w.")
-    days = (5, 10, 15, 20)
-    tags = ("w1", "w2", "w3", "w4")
-    return tuple(Tenor(day, pct, qty, tag) for day, pct, qty, tag in zip(days, otms, qtys, tags))
+def config_from_mapping(raw: dict | None = None) -> BookConfig:
+    """Accept the desk names (putDte, horizonDays) or the Python names."""
+    raw = raw or {}
+    base = BookConfig()
+    otm = raw.get("otm", [tenor.otm for tenor in base.tenors])
+    contracts = raw.get("contracts", [tenor.contracts for tenor in base.tenors])
+    if isinstance(otm, str):
+        otm = [float(part) for part in otm.split(",")]
+    if isinstance(contracts, str):
+        contracts = [int(part) for part in contracts.split(",")]
+    if len(otm) != 4 or len(contracts) != 4:
+        raise ValueError("otm and contracts need four values: 1w, 2w, 3w, 4w.")
+    tenors = tuple(
+        Tenor(day, float(pct), int(qty), tag)
+        for day, pct, qty, tag in zip((5, 10, 15, 20), otm, contracts, ("w1", "w2", "w3", "w4"))
+    )
+
+    def pick(*names, default):
+        for name in names:
+            if name in raw and raw[name] is not None:
+                return raw[name]
+        return default
+
+    return BookConfig(
+        lots=int(pick("lots", default=base.lots)),
+        spot=float(pick("spot", default=base.spot)),
+        qqq_mu=float(pick("qqqMu", "qqq_mu", "drift", default=base.qqq_mu)),
+        tqqq_vol=float(pick("tqqqVol", "tqqq_vol", "vol", default=base.tqqq_vol)),
+        iv=float(pick("iv", default=base.iv)),
+        rate=float(pick("rate", default=base.rate)),
+        horizon_days=int(pick("horizonDays", "horizon_days", "horizon", default=base.horizon_days)),
+        put_dte=int(pick("putDte", "put_dte", "dte", default=base.put_dte)),
+        paths=int(pick("paths", "nPaths", default=base.paths)),
+        seed=int(pick("seed", default=base.seed)),
+        strategy=str(pick("strategy", default=base.strategy)),
+        tenors=tenors,
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Price and simulate the configurable TQQQ book.")
     parser.add_argument("--lots", type=int, default=100)
-    parser.add_argument("--put-dte", type=int, default=90)
+    parser.add_argument("--put-dte", type=int, default=180)
+    parser.add_argument("--horizon", type=int, default=100)
     parser.add_argument("--otm", default="0.03,0.05,0.08,0.10", help="1w,2w,3w,4w percent OTM as decimals")
     parser.add_argument("--contracts", default="12,12,12,10")
     parser.add_argument("--spot", type=float, default=59.22)
@@ -489,28 +562,24 @@ def main() -> None:
     parser.add_argument("--paths", type=int, default=400)
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--strategy", default="wheel", choices=("wheel", "hold"))
+    parser.add_argument("--report", default="", help="Write an HTML desk report to this path.")
     args = parser.parse_args()
-    result = run(
-        BookConfig(
-            lots=args.lots,
-            spot=args.spot,
-            iv=args.iv,
-            tqqq_vol=args.vol,
-            qqq_mu=args.drift,
-            put_dte=args.put_dte,
-            paths=args.paths,
-            seed=args.seed,
-            strategy=args.strategy,
-            tenors=_tenors_from_args(args.otm, args.contracts),
-        )
-    )
+    result = run(config_from_mapping(vars(args) | {"horizon_days": args.horizon, "put_dte": args.put_dte, "vol": args.vol, "drift": args.drift}))
+    if args.report:
+        from tqqq_book.report import write_report
+        print(write_report(result, args.report))
     book = result["book"]
     mc = result["monte_carlo"]
-    print(f"lots {result['config']['lots']}  shares {result['config']['shares']}  put DTE {result['config']['put_dte']}")
+    cfg = result["config"]
+    print(
+        f"lots {cfg['lots']}  shares {cfg['shares']}  "
+        f"put DTE {cfg['put_dte']}  horizon {cfg['horizon_days']}  "
+        f"path {cfg['path_days']}d  put still has {cfg['put_days_left']}d"
+    )
     print(f"deployed ${book['deployed']:,.0f}  put ${book['put_premium']:,.0f}  call ${book['call_premium']:,.0f}  floor ${book['floor']:,.0f}")
     print(f"BS versus the scaled fill ${book['model_gap_vs_fill']:,.0f}")
     for line in book["puts"]:
-        print(f"  put {line['tag']} {line['qty']} x {line['strike']:.0f}  {line['dte']}d  ${line['premium']:.2f}")
+        print(f"  put {line['tag']} {line['qty']} x {line['strike']:.0f}  {line['dte']}d  ${line['premium']:.2f}  left {line['days_left_at_horizon']}d")
     for line in book["calls"]:
         print(f"  call {line['tag']} {line['qty']} x {line['strike']:.0f}  {line['dte']}d  otm {line['otm']:.1%}  ${line['premium']:.2f}")
     print(
