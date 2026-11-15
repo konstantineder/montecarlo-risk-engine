@@ -231,5 +231,5 @@ chmod +x mcp/run.sh
 PYTHONPATH=src .venv/bin/python -m tqqq_book --put-dte 180 --horizon 100 --paths 400 --seed 13 --report runs/tqqq-desk.html
 ```
 
-Codex starts `mcp/run.sh`, which uses `.venv/bin/python` and not whatever `python3` is on `PATH`. The local MCP is [mcp/README.md](mcp/README.md). It is stdio only. Tools are `tqqq_book`, `tqqq_monte_carlo`, and `tqqq_report`. Nothing is ordered.
+Codex starts `mcp/run.sh`, which uses `.venv/bin/python` and not whatever `python3` is on `PATH`. Each run is saved under `runs/<id>/` with `summary.json`, `paths.jsonl`, and `desk.html`. The local MCP is [mcp/README.md](mcp/README.md). It is stdio only. Tools are `tqqq_book`, `tqqq_monte_carlo`, `tqqq_report`, `tqqq_runs`, and `tqqq_run`. Nothing is ordered.
 

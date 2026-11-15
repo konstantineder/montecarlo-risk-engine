@@ -11,6 +11,19 @@ def _money(value: float) -> str:
     return f"{sign}${abs(value):,.0f}"
 
 
+def _px(value: float) -> str:
+    return f"{value:,.2f}"
+
+
+def _trade_text(trades: list[dict]) -> str:
+    bits = []
+    for trade in trades:
+        premium = trade.get("premium")
+        price = f" @ {premium:.2f}" if isinstance(premium, (int, float)) else ""
+        bits.append(f"{trade['action']} {trade.get('qty', '')}x {trade.get('strike', '')}{price}")
+    return "; ".join(bits)
+
+
 def _band(rows: list[dict], low: str, mid: str, high: str, width: int = 760, height: int = 240) -> str:
     if not rows:
         return ""
@@ -62,7 +75,7 @@ def write_report(result: dict, path: str | Path) -> str:
         ("Call premium", _money(book["call_premium"])),
         ("Floor", _money(book["floor"])),
         ("BS vs fill", _money(book["model_gap_vs_fill"])),
-        ("Put DTE", str(cfg["put_dte"])),
+        ("Initial put DTE", str(cfg.get("initial_dte", cfg["put_dte"]))),
         ("Horizon", f"{cfg['path_days']} of {cfg['horizon_days']}"),
         ("Put days left", str(cfg["put_days_left"])),
         ("Median P&L", _money(mc["median"])),
@@ -72,6 +85,19 @@ def write_report(result: dict, path: str | Path) -> str:
         ("Median drawdown", _money(mc["median_drawdown"])),
     ]
     cards = "".join(f'<div class="fact"><span>{label}</span><strong>{value}</strong></div>' for label, value in facts)
+    vol = result.get("vol") or {}
+    opening = "".join(
+        f"<tr><td>{trade['action']}</td><td>{trade['qty']}</td><td>{trade['strike']:.0f}</td><td>{trade['expiry']}</td><td>{trade['premium']:.2f}</td><td>{trade['tag']}</td></tr>"
+        for trade in book.get("opening_trades", [])
+    )
+    median = result.get("median_path") or {"path": "", "days": []}
+    day_rows = "".join(
+        "<tr>"
+        f"<td>{day['day']}</td><td>{_px(day['price'])}</td><td>{_money(day['pnl'])}</td>"
+        f"<td>{_money(day['mtm'])}</td><td>{day['iv']:.2f}</td><td>{day['shares']}</td>"
+        f"<td class=\"trades\">{_trade_text(day['trades'])}</td></tr>"
+        for day in median.get("days", [])
+    )
     page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -92,6 +118,8 @@ def write_report(result: dict, path: str | Path) -> str:
   th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #3a342b; }}
   th {{ color: #9c9486; font-weight: 500; }}
   svg {{ width: 100%; height: auto; background: #1c1915; border-radius: 12px; }}
+  .days {{ max-height: 540px; overflow: auto; border: 1px solid #3a342b; border-radius: 12px; }}
+  td.trades {{ color: #e6d3a3; }}
 </style>
 </head>
 <body>
@@ -99,6 +127,7 @@ def write_report(result: dict, path: str | Path) -> str:
   <p>TQQQ · {cfg['lots']} lots · model marks, not an order</p>
   <h1>Path desk</h1>
   <p>{result['note']}</p>
+  <p>{vol.get('note', '')}</p>
   <div class="facts">{cards}</div>
   <section>
     <h2>Spot, 5th to 95th percentile</h2>
@@ -107,6 +136,26 @@ def write_report(result: dict, path: str | Path) -> str:
   <section>
     <h2>P&L, 5th to 95th percentile</h2>
     {_band(ribbon, "pnl_p05", "pnl_p50", "pnl_p95")}
+  </section>
+  <section>
+    <h2>MTM, 5th to 95th percentile</h2>
+    {_band(ribbon, "mtm_p05", "mtm_p50", "mtm_p95")}
+  </section>
+  <section>
+    <h2>Opening trades</h2>
+    <table>
+      <thead><tr><th>Action</th><th>Qty</th><th>Strike</th><th>Expiry</th><th>Premium</th><th>Tag</th></tr></thead>
+      <tbody>{opening}</tbody>
+    </table>
+  </section>
+  <section>
+    <h2>Median path {median.get('path', '')}, each day</h2>
+    <div class="days">
+    <table>
+      <thead><tr><th>Day</th><th>Price</th><th>P&L</th><th>MTM</th><th>IV</th><th>Shares</th><th>Trades</th></tr></thead>
+      <tbody>{day_rows}</tbody>
+    </table>
+    </div>
   </section>
   <section>
     <h2>Opening prices used</h2>

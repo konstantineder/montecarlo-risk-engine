@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
-from tqqq_book.desk import build_book, config_from_mapping
-from tqqq_book.report import write_report
-from tqqq_book.desk import run
+from tqqq_book.desk import build_book, config_from_mapping, run
+from tqqq_book.store import list_runs, load_path, load_summary
 
 PROTOCOL = "2025-06-18"
 
@@ -20,7 +18,8 @@ CONFIG = {
     "properties": {
         "lots": {"type": "number", "description": "100-share lots. Default 100, which is 10,000 shares."},
         "spot": {"type": "number", "description": "TQQQ spot. Default 59.22."},
-        "putDte": {"type": "number", "description": "Protective put days to expiry. Default 180. Independent of the path length."},
+        "putDte": {"type": "number", "description": "Initial DTE of the protective puts. Alias of initialDte. Default 180. Independent of the path length."},
+        "initialDte": {"type": "number", "description": "Initial DTE of the puts you buy. Same as putDte. Default 180."},
         "horizonDays": {"type": "number", "description": "Trading days to simulate. Default 100. The put is marked for whatever life is left."},
         "iv": {"type": "number", "description": "Opening implied vol. Default 0.71. Premiums use this, not the IBKR fill."},
         "vol": {"type": "number", "description": "TQQQ realized vol used for the path. Default 0.66."},
@@ -44,14 +43,37 @@ TOOLS = [
     },
     {
         "name": "tqqq_monte_carlo",
-        "description": "Run the wheel or the hold on daily 3x TQQQ paths. Premiums are the engine prices from tqqq_book. Returns the P&L distribution and a day-by-day 5th/50th/95th ribbon for spot and P&L. Nothing is ordered.",
+        "description": "Run the wheel or the hold on daily 3x TQQQ paths. Premiums are the engine prices from tqqq_book. Saves the run and returns each day of the median path: price, P&L, MTM, IV, and trades. Every path is in the saved paths file. Nothing is ordered.",
         "inputSchema": CONFIG,
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     },
     {
         "name": "tqqq_report",
-        "description": "Run tqqq_monte_carlo and write a one-page HTML desk with the book, the two bands, and the premiums that were used. Returns that file path plus the summary. Nothing is ordered.",
+        "description": "Run tqqq_monte_carlo, save it, and write desk.html in that run folder. The page has the median path day by day. Nothing is ordered.",
         "inputSchema": CONFIG,
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "tqqq_runs",
+        "description": "List saved Monte Carlo runs, newest last. Nothing is ordered.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "number", "description": "How many runs to return. Default 20."}},
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "tqqq_run",
+        "description": "Read one saved run. Pass id, or latest. Pass path to get that path's day-by-day price, P&L, MTM, and trades. Omit path to get the summary and the median path. Nothing is ordered.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Run id from tqqq_runs, or latest."},
+                "path": {"type": "number", "description": "Path number inside that run. Omit for the summary."},
+            },
+            "additionalProperties": False,
+        },
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     },
 ]
@@ -81,6 +103,7 @@ def _book_view(raw: dict) -> dict:
         })
     return {
         "put_dte": cfg.put_dte,
+        "initial_dte": cfg.put_dte,
         "horizon_days": cfg.horizon_days,
         "path_days": path_days,
         "put_days_left": max(0, cfg.put_dte - path_days),
@@ -106,12 +129,17 @@ def _call(name: str, args: dict) -> str:
         return json.dumps(result)
     if name == "tqqq_report":
         result = run(config_from_mapping(args))
-        out = Path(__file__).resolve().parents[2] / "runs" / "tqqq-desk.html"
-        path = write_report(result, out)
-        shown = {key: result[key] for key in ("note", "config", "book", "monte_carlo")}
-        shown["html"] = path
+        shown = {key: result[key] for key in ("note", "config", "book", "monte_carlo", "vol", "saved", "median_path")}
         shown["ribbon_days"] = len(result["ribbon"])
         return json.dumps(shown)
+    if name == "tqqq_runs":
+        limit = int(args.get("limit") or 20)
+        return json.dumps(list_runs(limit))
+    if name == "tqqq_run":
+        run_id = str(args.get("id") or "latest")
+        if "path" in args and args["path"] is not None:
+            return json.dumps(load_path(run_id, int(args["path"])))
+        return json.dumps(load_summary(run_id))
     raise ValueError(f"Unknown tool {name}. Nothing was run.")
 
 
@@ -135,7 +163,7 @@ def _on_message(raw: str) -> None:
                 "protocolVersion": requested if isinstance(requested, str) and requested else PROTOCOL,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "tqqq-book", "version": "1.0.0"},
-                "instructions": "Read-only. tqqq_book prices the puts and calls. tqqq_monte_carlo runs the paths. tqqq_report writes the HTML desk. Put DTE and horizon days are separate. A premium is the model, not a broker quote. Nothing is ordered.",
+                "instructions": "Read-only. tqqq_book prices the puts and calls. tqqq_monte_carlo runs the paths and saves every day. tqqq_run reads a saved run. Put initial DTE and horizon days are separate. Realized vol does not drift. A premium is the model, not a broker quote. Nothing is ordered.",
             },
         })
         return

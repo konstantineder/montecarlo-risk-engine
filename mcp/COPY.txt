@@ -55,9 +55,9 @@ Turn tqqq-book off and on in the MCP server list if the tools do not refresh.
 
 Marks are the analytic Black-Scholes price. Nothing is ordered.
 
-Tools: tqqq_book, tqqq_monte_carlo, tqqq_report.
-putDte and horizonDays are separate. Defaults are put DTE 180 and horizon 100.
-tqqq_report writes REPO/runs/tqqq-desk.html.
+Tools: tqqq_book, tqqq_monte_carlo, tqqq_report, tqqq_runs, tqqq_run.
+initialDte is the starting life of the puts you buy. putDte is the same knob.
+Each run is saved under REPO/runs. tqqq_run reads one path's price, P&L, MTM, and trades.
 
 One skill. Copy it once:
 
