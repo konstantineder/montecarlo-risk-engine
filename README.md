@@ -224,8 +224,12 @@ docker run -it mcengine python tests/pv_tests/pv_european_option.py
 This fork prices the 13 Nov protective-put book with the engine's analytic Black-Scholes, then runs a daily-reset path. Put DTE and the horizon are separate. The default is a 180-day put marked over a 100-day path, so the put still has 80 days left at the end. Premiums are not the IBKR fill.
 
 ```bash
-PYTHONPATH=src python3 -m tqqq_book --put-dte 180 --horizon 100 --paths 400 --seed 13 --report runs/tqqq-desk.html
+git pull
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+chmod +x mcp/run.sh
+PYTHONPATH=src .venv/bin/python -m tqqq_book --put-dte 180 --horizon 100 --paths 400 --seed 13 --report runs/tqqq-desk.html
 ```
 
-The local MCP is [mcp/README.md](mcp/README.md). It is stdio only. Tools are `tqqq_book`, `tqqq_monte_carlo`, and `tqqq_report`. Nothing is ordered.
+Codex starts `mcp/run.sh`, which uses `.venv/bin/python` and not whatever `python3` is on `PATH`. The local MCP is [mcp/README.md](mcp/README.md). It is stdio only. Tools are `tqqq_book`, `tqqq_monte_carlo`, and `tqqq_report`. Nothing is ordered.
 

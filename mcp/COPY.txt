@@ -5,13 +5,21 @@ That dialog wants a public https URL. This server has no URL, no port, and no OA
 Replace REPO with the folder you cloned, for example
 /Users/you/dev/montecarlo-risk-engine
 
-1. Once, in Terminal
+1. Once, in Terminal. Same commands after every git pull.
 
 cd REPO
+git pull
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 chmod +x mcp/run.sh
 
-The file ChatGPT starts is mcp/run.sh.
-Do not point it at src/tqqq_book/mcp_server.py. That file is a module.
+Python 3.12 matches the Dockerfile. Do not use the system python3.
+That is the interpreter that failed with: No module named 'numpy'.
+The venv is local. It is not committed.
+
+The file Codex starts is mcp/run.sh.
+That script runs REPO/.venv/bin/python. It does not use PATH.
+Do not point the command at src/tqqq_book/mcp_server.py.
 
 2. Copy this into ~/.codex/config.toml
 
@@ -35,6 +43,15 @@ Leave URL blank. Leave authentication blank. There is no OAuth.
 Name              not a python command
 Server URL        not a file path, and not https://example.com/mcp
 Authentication    not OAuth
+
+After you pull a newer main, run the same three lines again so the venv
+matches the tree. Then restart Codex and open a new chat.
+
+cd REPO
+git pull
+.venv/bin/python -m pip install -r requirements.txt
+
+Turn tqqq-book off and on in the MCP server list if the tools do not refresh.
 
 Marks are the analytic Black-Scholes price. Nothing is ordered.
 
