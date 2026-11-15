@@ -1,4 +1,4 @@
-"""One-page desk report. No network. The chart data is the Monte Carlo ribbon."""
+"""One-page desk report. No network. The grids are filled from the saved paths."""
 
 from __future__ import annotations
 
@@ -9,19 +9,6 @@ from pathlib import Path
 def _money(value: float) -> str:
     sign = "-" if value < 0 else ""
     return f"{sign}${abs(value):,.0f}"
-
-
-def _px(value: float) -> str:
-    return f"{value:,.2f}"
-
-
-def _trade_text(trades: list[dict]) -> str:
-    bits = []
-    for trade in trades:
-        premium = trade.get("premium")
-        price = f" @ {premium:.2f}" if isinstance(premium, (int, float)) else ""
-        bits.append(f"{trade['action']} {trade.get('qty', '')}x {trade.get('strike', '')}{price}")
-    return "; ".join(bits)
 
 
 def _band(rows: list[dict], low: str, mid: str, high: str, width: int = 760, height: int = 240) -> str:
@@ -54,6 +41,37 @@ def _band(rows: list[dict], low: str, mid: str, high: str, width: int = 760, hei
     )
 
 
+def _load_paths(result: dict) -> list[dict]:
+    saved = result.get("saved") or {}
+    source = saved.get("paths")
+    if source and Path(source).exists():
+        return [json.loads(line) for line in Path(source).read_text().splitlines() if line.strip()]
+    median = result.get("median_path")
+    if isinstance(median, dict) and median.get("days"):
+        return [median]
+    return []
+
+
+def _slim(paths: list[dict]) -> list[dict]:
+    kept = []
+    for row in paths:
+        last = row["days"][-1] if row.get("days") else {}
+        kept.append({
+            "path": row["path"],
+            "pnl": row["pnl"],
+            "ending_spot": row["ending_spot"],
+            "min_spot": row["min_spot"],
+            "max_dd": row["max_dd"],
+            "ending_shares": row["ending_shares"],
+            "assignments": row["assignments"],
+            "new_calls": row["new_calls"],
+            "roll_cash": row["roll_cash"],
+            "mtm": last.get("mtm", 0.0),
+            "days": row["days"],
+        })
+    return kept
+
+
 def write_report(result: dict, path: str | Path) -> str:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +79,9 @@ def write_report(result: dict, path: str | Path) -> str:
     book = result["book"]
     mc = result["monte_carlo"]
     ribbon = result["ribbon"]
+    vol = result.get("vol") or {}
+    paths = _slim(_load_paths(result))
+    selected = (result.get("median_path") or {}).get("path", 0)
     legs = "".join(
         "<tr>"
         f"<td>{leg['side']} {leg.get('tag')}</td>"
@@ -85,89 +106,278 @@ def write_report(result: dict, path: str | Path) -> str:
         ("Median drawdown", _money(mc["median_drawdown"])),
     ]
     cards = "".join(f'<div class="fact"><span>{label}</span><strong>{value}</strong></div>' for label, value in facts)
-    vol = result.get("vol") or {}
     opening = "".join(
         f"<tr><td>{trade['action']}</td><td>{trade['qty']}</td><td>{trade['strike']:.0f}</td><td>{trade['expiry']}</td><td>{trade['premium']:.2f}</td><td>{trade['tag']}</td></tr>"
         for trade in book.get("opening_trades", [])
     )
-    median = result.get("median_path") or {"path": "", "days": []}
-    day_rows = "".join(
-        "<tr>"
-        f"<td>{day['day']}</td><td>{_px(day['price'])}</td><td>{_money(day['pnl'])}</td>"
-        f"<td>{_money(day['mtm'])}</td><td>{day['iv']:.2f}</td><td>{day['shares']}</td>"
-        f"<td class=\"trades\">{_trade_text(day['trades'])}</td></tr>"
-        for day in median.get("days", [])
-    )
-    page = f"""<!doctype html>
+    payload = json.dumps({"paths": paths, "selected": selected}, separators=(",", ":")).replace("<", "\\u003c")
+    page = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>TQQQ book · {cfg['put_dte']} DTE · {cfg['path_days']} day path</title>
+<title>TQQQ book · __DTE__ DTE · __DAYS__ day path</title>
 <style>
-  body {{ margin: 0; background: #14120e; color: #f3efe4; font: 15px/1.45 Georgia, serif; }}
-  main {{ max-width: 980px; margin: 0 auto; padding: 32px 20px 64px; }}
-  h1 {{ font-weight: 500; font-size: 36px; margin: 0 0 8px; }}
-  p {{ color: #b7ae9d; }}
-  .facts {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #3a342b; border-radius: 12px; overflow: hidden; }}
-  .fact {{ background: #1c1915; padding: 14px 16px; }}
-  .fact span {{ display: block; color: #9c9486; font: 11px/1.2 ui-monospace, monospace; letter-spacing: 0.04em; text-transform: uppercase; }}
-  .fact strong {{ display: block; margin-top: 6px; font: 20px/1.2 ui-monospace, monospace; }}
-  section {{ margin-top: 28px; }}
-  h2 {{ font-size: 18px; font-weight: 500; margin: 0 0 8px; }}
-  table {{ width: 100%; border-collapse: collapse; font: 13px/1.4 ui-monospace, monospace; }}
-  th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #3a342b; }}
-  th {{ color: #9c9486; font-weight: 500; }}
-  svg {{ width: 100%; height: auto; background: #1c1915; border-radius: 12px; }}
-  .days {{ max-height: 540px; overflow: auto; border: 1px solid #3a342b; border-radius: 12px; }}
-  td.trades {{ color: #e6d3a3; }}
+  body { margin: 0; background: #14120e; color: #f3efe4; font: 15px/1.45 Georgia, serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-weight: 500; font-size: 36px; margin: 0 0 8px; }
+  p { color: #b7ae9d; }
+  .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #3a342b; border-radius: 12px; overflow: hidden; }
+  .fact { background: #1c1915; padding: 14px 16px; }
+  .fact span { display: block; color: #9c9486; font: 11px/1.2 ui-monospace, monospace; letter-spacing: 0.04em; text-transform: uppercase; }
+  .fact strong { display: block; margin-top: 6px; font: 20px/1.2 ui-monospace, monospace; }
+  section { margin-top: 28px; }
+  h2 { font-size: 18px; font-weight: 500; margin: 0 0 8px; }
+  table { width: 100%; border-collapse: collapse; font: 13px/1.4 ui-monospace, monospace; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #3a342b; white-space: nowrap; }
+  th { color: #9c9486; font-weight: 500; }
+  svg { width: 100%; height: auto; background: #1c1915; border-radius: 12px; }
+  .grid { max-height: 440px; overflow: auto; border: 1px solid #3a342b; border-radius: 12px; }
+  .grid th { position: sticky; top: 0; background: #221e19; cursor: pointer; z-index: 1; }
+  .grid tbody tr { cursor: pointer; }
+  .grid tbody tr:hover { background: #241f19; }
+  .grid tr.on { background: #2c261e; }
+  td.trades { color: #e6d3a3; white-space: normal; }
+  .detail { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #3a342b; border-radius: 12px; overflow: hidden; margin: 12px 0; }
 </style>
 </head>
 <body>
 <main>
-  <p>TQQQ · {cfg['lots']} lots · model marks, not an order</p>
+  <p>TQQQ · __LOTS__ lots · model marks, not an order</p>
   <h1>Path desk</h1>
-  <p>{result['note']}</p>
-  <p>{vol.get('note', '')}</p>
-  <div class="facts">{cards}</div>
+  <p>__NOTE__</p>
+  <p>__VOL__</p>
+  <div class="facts">__CARDS__</div>
   <section>
     <h2>Spot, 5th to 95th percentile</h2>
-    {_band(ribbon, "spot_p05", "spot_p50", "spot_p95")}
+    __SPOT__
   </section>
   <section>
     <h2>P&L, 5th to 95th percentile</h2>
-    {_band(ribbon, "pnl_p05", "pnl_p50", "pnl_p95")}
+    __PNL__
   </section>
   <section>
     <h2>MTM, 5th to 95th percentile</h2>
-    {_band(ribbon, "mtm_p05", "mtm_p50", "mtm_p95")}
+    __MTM__
+  </section>
+  <section>
+    <h2>Paths</h2>
+    <p id="path-sort">Click Index, P&L, or Spot to sort. Click a row for every day of that path.</p>
+    <div class="grid">
+      <table>
+        <thead>
+          <tr>
+            <th data-grid="paths" data-key="path">Index</th>
+            <th data-grid="paths" data-key="ending_spot">Spot</th>
+            <th data-grid="paths" data-key="pnl">P&L</th>
+            <th data-grid="paths" data-key="mtm">MTM</th>
+            <th data-grid="paths" data-key="min_spot">Min spot</th>
+            <th data-grid="paths" data-key="max_dd">Drawdown</th>
+            <th data-grid="paths" data-key="trades">Trades</th>
+          </tr>
+        </thead>
+        <tbody id="paths"></tbody>
+      </table>
+    </div>
+  </section>
+  <section>
+    <h2 id="detail-title">Path</h2>
+    <div class="detail" id="detail-facts"></div>
+    <p id="day-sort">Days for the path you clicked. Sort by day, spot, or P&L.</p>
+    <div class="grid">
+      <table>
+        <thead>
+          <tr>
+            <th data-grid="days" data-key="day">Day</th>
+            <th data-grid="days" data-key="price">Spot</th>
+            <th data-grid="days" data-key="pnl">P&L</th>
+            <th data-grid="days" data-key="mtm">MTM</th>
+            <th data-grid="days" data-key="iv">IV</th>
+            <th data-grid="days" data-key="shares">Shares</th>
+            <th>Trades</th>
+          </tr>
+        </thead>
+        <tbody id="days"></tbody>
+      </table>
+    </div>
   </section>
   <section>
     <h2>Opening trades</h2>
     <table>
       <thead><tr><th>Action</th><th>Qty</th><th>Strike</th><th>Expiry</th><th>Premium</th><th>Tag</th></tr></thead>
-      <tbody>{opening}</tbody>
+      <tbody>__OPENING__</tbody>
     </table>
-  </section>
-  <section>
-    <h2>Median path {median.get('path', '')}, each day</h2>
-    <div class="days">
-    <table>
-      <thead><tr><th>Day</th><th>Price</th><th>P&L</th><th>MTM</th><th>IV</th><th>Shares</th><th>Trades</th></tr></thead>
-      <tbody>{day_rows}</tbody>
-    </table>
-    </div>
   </section>
   <section>
     <h2>Opening prices used</h2>
     <table>
       <thead><tr><th>Leg</th><th>Qty</th><th>Strike</th><th>DTE</th><th>Left at horizon</th><th>Premium</th><th>Priced by</th></tr></thead>
-      <tbody>{legs}</tbody>
+      <tbody>__LEGS__</tbody>
     </table>
   </section>
 </main>
-<script type="application/json" id="run">{json.dumps({"config": cfg, "book": book, "monte_carlo": mc})}</script>
+<script type="application/json" id="data">__JSON__</script>
+<script>
+const data = JSON.parse(document.getElementById("data").textContent);
+const paths = data.paths;
+let pathKey = "path";
+let pathDir = 1;
+let dayKey = "day";
+let dayDir = 1;
+let current = paths.find((row) => row.path === data.selected) || paths[0];
+
+function money(value) {
+  const sign = value < 0 ? "-" : "";
+  return sign + "$" + Math.abs(value).toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+function px(value) {
+  return Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function tradeCount(row) {
+  return row.days.reduce((sum, day) => sum + day.trades.length, 0);
+}
+function tradeText(trades) {
+  return trades.map((trade) => {
+    const bits = [trade.action, (trade.qty ?? "") + "x", String(trade.strike ?? "")];
+    if (typeof trade.premium === "number") bits.push("@" + trade.premium.toFixed(2));
+    if (trade.tag) bits.push(String(trade.tag));
+    if (trade.expiry != null) bits.push("exp " + trade.expiry);
+    if (typeof trade.intrinsic === "number" && trade.intrinsic > 0) bits.push("intrinsic " + trade.intrinsic.toFixed(2));
+    if (trade.reason) bits.push(trade.reason);
+    return bits.join(" ");
+  }).join("; ");
+}
+function cell(text, className) {
+  const node = document.createElement("td");
+  node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+function mark(grid, key, dir) {
+  document.querySelectorAll('th[data-grid="' + grid + '"]').forEach((th) => {
+    const name = th.dataset.label || th.textContent.replace(/[↑↓]$/, "");
+    th.dataset.label = name;
+    th.textContent = th.dataset.key === key ? name + (dir > 0 ? " ↑" : " ↓") : name;
+  });
+}
+function renderPaths() {
+  const body = document.getElementById("paths");
+  body.replaceChildren();
+  const rows = paths.slice().sort((a, b) => {
+    const left = pathKey === "trades" ? tradeCount(a) : a[pathKey];
+    const right = pathKey === "trades" ? tradeCount(b) : b[pathKey];
+    return (left - right) * pathDir;
+  });
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    if (current && row.path === current.path) tr.className = "on";
+    tr.append(
+      cell(String(row.path)),
+      cell(px(row.ending_spot)),
+      cell(money(row.pnl)),
+      cell(money(row.mtm)),
+      cell(px(row.min_spot)),
+      cell(money(row.max_dd)),
+      cell(String(tradeCount(row)))
+    );
+    tr.addEventListener("click", () => {
+      current = row;
+      dayKey = "day";
+      dayDir = 1;
+      document.querySelectorAll("#paths tr").forEach((el) => el.classList.remove("on"));
+      tr.classList.add("on");
+      renderDays();
+    });
+    body.append(tr);
+  });
+  mark("paths", pathKey, pathDir);
+  document.getElementById("path-sort").textContent =
+    paths.length + " paths. Sorted by " + pathKey + (pathDir > 0 ? ", low to high." : ", high to low.") + " Click a row for every day.";
+}
+function renderDays() {
+  const title = document.getElementById("detail-title");
+  const facts = document.getElementById("detail-facts");
+  const body = document.getElementById("days");
+  body.replaceChildren();
+  facts.replaceChildren();
+  if (!current) {
+    title.textContent = "Path";
+    return;
+  }
+  title.textContent = "Path " + current.path;
+  [
+    ["Index", String(current.path)],
+    ["End spot", px(current.ending_spot)],
+    ["P&L", money(current.pnl)],
+    ["MTM", money(current.mtm)],
+    ["Min spot", px(current.min_spot)],
+    ["Drawdown", money(current.max_dd)],
+    ["Shares", String(current.ending_shares)],
+    ["Assignments", String(current.assignments)],
+    ["New calls", String(current.new_calls)],
+    ["Roll cash", money(current.roll_cash)],
+    ["Trades", String(tradeCount(current))],
+    ["Days", String(current.days.length)]
+  ].forEach((pair) => {
+    const fact = document.createElement("div");
+    fact.className = "fact";
+    const span = document.createElement("span");
+    span.textContent = pair[0];
+    const strong = document.createElement("strong");
+    strong.textContent = pair[1];
+    fact.append(span, strong);
+    facts.append(fact);
+  });
+  const days = current.days.slice().sort((a, b) => (a[dayKey] - b[dayKey]) * dayDir);
+  days.forEach((day) => {
+    const tr = document.createElement("tr");
+    tr.append(
+      cell(String(day.day)),
+      cell(px(day.price)),
+      cell(money(day.pnl)),
+      cell(money(day.mtm)),
+      cell(Number(day.iv).toFixed(2)),
+      cell(String(day.shares)),
+      cell(tradeText(day.trades), "trades")
+    );
+    body.append(tr);
+  });
+  mark("days", dayKey, dayDir);
+}
+document.querySelectorAll("th[data-key]").forEach((th) => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (th.dataset.grid === "paths") {
+      pathDir = pathKey === key ? pathDir * -1 : (key === "path" ? 1 : -1);
+      pathKey = key;
+      renderPaths();
+    } else {
+      dayDir = dayKey === key ? dayDir * -1 : (key === "day" ? 1 : -1);
+      dayKey = key;
+      renderDays();
+    }
+  });
+});
+renderPaths();
+renderDays();
+</script>
 </body>
 </html>
 """
+    replacements = {
+        "__DTE__": str(cfg["put_dte"]),
+        "__DAYS__": str(cfg["path_days"]),
+        "__LOTS__": str(cfg["lots"]),
+        "__NOTE__": result["note"],
+        "__VOL__": vol.get("note", ""),
+        "__CARDS__": cards,
+        "__SPOT__": _band(ribbon, "spot_p05", "spot_p50", "spot_p95"),
+        "__PNL__": _band(ribbon, "pnl_p05", "pnl_p50", "pnl_p95"),
+        "__MTM__": _band(ribbon, "mtm_p05", "mtm_p50", "mtm_p95"),
+        "__OPENING__": opening,
+        "__LEGS__": legs,
+        "__JSON__": payload,
+    }
+    for token, value in replacements.items():
+        page = page.replace(token, value)
     target.write_text(page)
     return str(target.resolve())
