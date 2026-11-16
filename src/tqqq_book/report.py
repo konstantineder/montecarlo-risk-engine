@@ -412,6 +412,67 @@ function chart(days, key) {
   return '<svg viewBox="0 0 ' + width + " " + height + '" role="img">' + grid + zero +
     '<polyline points="' + line + '" fill="none" stroke="#e6d3a3" stroke-width="1.8"/>' + dots + "</svg>";
 }
+function bookCounts(day) {
+  let shares = 0;
+  let puts = 0;
+  let shortCalls = 0;
+  let shortPuts = 0;
+  (day.position || []).map(unpackLine).forEach((row) => {
+    const qty = Number(row.qty) || 0;
+    if (row.name === "share") shares = qty;
+    else if (row.name === "put" && row.side === "long") puts += qty;
+    else if (row.name === "call" && row.side === "short") shortCalls += qty;
+    else if (row.name === "put" && row.side === "short") shortPuts += qty;
+  });
+  return {shares: shares / 100, puts: puts, shortCalls: shortCalls, shortPuts: shortPuts};
+}
+function linesChart(days, series) {
+  const ordered = days.slice().sort((a, b) => a.day - b.day);
+  const counts = ordered.map(bookCounts);
+  const width = 1040;
+  const height = 280;
+  const left = 78;
+  const right = 16;
+  const top = 28;
+  const bottom = 32;
+  const all = [0];
+  series.forEach((item) => counts.forEach((row) => all.push(row[item.key])));
+  let low = Math.min.apply(null, all);
+  let high = Math.max.apply(null, all);
+  if (high === low) high += 1;
+  const span = high - low || 1;
+  low -= span * 0.06;
+  high += span * 0.08;
+  const lastDay = ordered[ordered.length - 1].day || 1;
+  const x = (day) => left + (day / lastDay) * (width - left - right);
+  const y = (value) => top + (1 - (value - low) / (high - low)) * (height - top - bottom);
+  const yTicks = 5;
+  const xTicks = Math.min(6, lastDay);
+  let grid = "";
+  for (let i = 0; i < yTicks; i += 1) {
+    const value = low + ((high - low) * i) / (yTicks - 1);
+    const yy = y(value);
+    grid += '<line x1="' + left + '" y1="' + yy.toFixed(1) + '" x2="' + (width - right) + '" y2="' + yy.toFixed(1) + '" stroke="#3a342b"/>';
+    grid += '<text x="' + (left - 8) + '" y="' + (yy + 4).toFixed(1) + '" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace, monospace">' + Math.round(value) + "</text>";
+  }
+  for (let i = 0; i < xTicks; i += 1) {
+    const day = Math.round((lastDay * i) / (xTicks - 1));
+    const xx = x(day);
+    grid += '<line x1="' + xx.toFixed(1) + '" y1="' + top + '" x2="' + xx.toFixed(1) + '" y2="' + (height - bottom) + '" stroke="#2a261f"/>';
+    grid += '<text x="' + xx.toFixed(1) + '" y="' + (height - 10) + '" text-anchor="middle" fill="#9c9486" font-size="11" font-family="ui-monospace, monospace">' + day + "</text>";
+  }
+  let legend = "";
+  series.forEach((item, index) => {
+    const x0 = left + index * 170;
+    legend += '<line x1="' + x0 + '" y1="12" x2="' + (x0 + 22) + '" y2="12" stroke="' + item.color + '" stroke-width="2"/>';
+    legend += '<text x="' + (x0 + 28) + '" y="16" fill="#c8c0b4" font-size="12" font-family="ui-monospace, monospace">' + item.label + "</text>";
+  });
+  const lines = series.map((item) => {
+    const points = ordered.map((day, index) => x(day.day).toFixed(1) + "," + y(counts[index][item.key]).toFixed(1)).join(" ");
+    return '<polyline points="' + points + '" fill="none" stroke="' + item.color + '" stroke-width="1.8"/>';
+  }).join("");
+  return '<svg viewBox="0 0 ' + width + " " + height + '" role="img">' + grid + legend + lines + "</svg>";
+}
 let selectedDayNum = null;
 let selectedDay = null;
 function costText(row) {
@@ -551,7 +612,17 @@ function renderDays() {
   const pnlCard = document.createElement("div");
   spotCard.innerHTML = "<h3>Spot. Left is the price, bottom is the day. Dots are trades.</h3>" + chart(current.days, "price");
   pnlCard.innerHTML = "<h3>P&L. Left is dollars, bottom is the same day. Dashed line is zero.</h3>" + chart(current.days, "pnl");
-  charts.append(spotCard, pnlCard);
+  const coverCard = document.createElement("div");
+  const shortCard = document.createElement("div");
+  coverCard.innerHTML = "<h3>Cover. Shares ÷ 100 against the long puts. The two should stay near each other.</h3>" + linesChart(current.days, [
+    {key: "shares", color: "#e6d3a3", label: "shares ÷ 100"},
+    {key: "puts", color: "#7d9a84", label: "long puts"}
+  ]);
+  shortCard.innerHTML = "<h3>Short options still open.</h3>" + linesChart(current.days, [
+    {key: "shortCalls", color: "#e6d3a3", label: "short calls"},
+    {key: "shortPuts", color: "#d07a62", label: "short puts"}
+  ]);
+  charts.append(spotCard, pnlCard, coverCard, shortCard);
   [
     ["Index", String(current.path)],
     ["End spot", px(current.ending_spot)],
