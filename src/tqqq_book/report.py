@@ -110,6 +110,10 @@ def write_report(result: dict, path: str | Path) -> str:
         f"<tr><td>{trade['action']}</td><td>{trade['qty']}</td><td>{trade['strike']:.0f}</td><td>{trade['expiry']}</td><td>{trade['premium']:.2f}</td><td>{trade['tag']}</td></tr>"
         for trade in book.get("opening_trades", [])
     )
+    rule_rows = []
+    for rule in result.get("rules") or [{"name": "hold", "says": "Keep the opening book. No new orders.",}]:
+        knobs = " ".join(f"{key} {value}" for key, value in rule.items() if key not in ("name", "says"))
+        rule_rows.append(f"<tr><td>{rule['name']}</td><td>{rule['says']}</td><td>{knobs}</td></tr>")
     payload = json.dumps({"paths": paths, "selected": selected}, separators=(",", ":")).replace("<", "\\u003c")
     page = """<!doctype html>
 <html lang="en">
@@ -149,6 +153,14 @@ def write_report(result: dict, path: str | Path) -> str:
   <p>__NOTE__</p>
   <p>__VOL__</p>
   <div class="facts">__CARDS__</div>
+  <section>
+    <h2>Rules</h2>
+    <p>strategy.apply walks these in order. A trade on a path names the rule that made it.</p>
+    <table>
+      <thead><tr><th>Rule</th><th>What it decides</th><th>Knobs</th></tr></thead>
+      <tbody>__RULES__</tbody>
+    </table>
+  </section>
   <section>
     <h2>Spot, 5th to 95th percentile</h2>
     __SPOT__
@@ -247,7 +259,7 @@ function tradeCount(row) {
 }
 function tradeText(trades) {
   return trades.map((trade) => {
-    const bits = [trade.action, (trade.qty ?? "") + "x", String(trade.strike ?? "")];
+    const bits = [trade.rule, trade.action, (trade.qty ?? "") + "x", String(trade.strike ?? "")].filter((part) => part !== undefined && part !== "");
     if (typeof trade.premium === "number") bits.push("@" + trade.premium.toFixed(2));
     if (trade.tag) bits.push(String(trade.tag));
     if (trade.expiry != null) bits.push("exp " + trade.expiry);
@@ -455,6 +467,7 @@ renderDays();
         "__PNL__": _band(ribbon, "pnl_p05", "pnl_p50", "pnl_p95"),
         "__MTM__": _band(ribbon, "mtm_p05", "mtm_p50", "mtm_p95"),
         "__OPENING__": opening,
+        "__RULES__": "".join(rule_rows),
         "__LEGS__": legs,
         "__JSON__": payload,
     }

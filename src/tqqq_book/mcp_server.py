@@ -9,6 +9,7 @@ import json
 import sys
 
 from tqqq_book.desk import build_book, config_from_mapping, run
+from tqqq_book.strategy import describe, rules_for
 from tqqq_book.store import list_runs, load_path, load_summary
 
 PROTOCOL = "2025-06-18"
@@ -117,7 +118,8 @@ def _book_view(raw: dict) -> dict:
         "floor": book["floor"],
         "model_gap_vs_fill": round(book["model_gap"], 2),
         "legs": legs,
-        "note": "Premiums are the analytic Black-Scholes price at this spot, IV, and DTE. Not the IBKR fill.",
+        "rules": describe(rules_for(cfg)),
+        "note": "Premiums are the analytic Black-Scholes price at this spot, IV, and DTE. Each day, strategy.apply walks the rules. Not the IBKR fill.",
     }
 
 
