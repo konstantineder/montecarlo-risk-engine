@@ -41,6 +41,7 @@ class Order:
     tag: str = ""
     otm: float = 0.0
     tenor: int = 0
+    roll_at: int = 0
     leg: object = None
     reason: str = ""
 
@@ -142,6 +143,42 @@ class CrashRoll:
             "fraction": self.fraction,
             "line": round(self.line, 2),
             "down": self.down,
+        }
+
+
+@dataclass(frozen=True)
+class KeepTenor:
+    """When a put has this many days left, sell it and buy the same strike back out at its own DTE."""
+
+    sleeves: tuple = ()
+    name: str = "keep_tenor"
+
+    def apply(self, position: Position) -> list[Order]:
+        orders = []
+        for leg in list(position.legs):
+            if not (leg.open and leg.side == "long" and leg.kind == "put" and leg.qty > 0):
+                continue
+            if leg.roll_at <= 0 or leg.tenor <= 0:
+                continue
+            left = leg.expiry - position.day
+            if left > leg.roll_at or position.day >= position.last:
+                continue
+            orders.append(Order(
+                self.name, "extend_put", leg.qty, leg.strike, position.day + leg.tenor, leg.tag,
+                tenor=leg.tenor, roll_at=leg.roll_at, leg=leg,
+                reason=f"{left}d left, back to {leg.tenor}d",
+            ))
+        return orders
+
+    def describe(self) -> dict:
+        schedule = ", ".join(
+            f"{sleeve.weight:.0%} {sleeve.dte}d rolls at {sleeve.roll_at}"
+            for sleeve in self.sleeves
+        )
+        return {
+            "name": self.name,
+            "says": "Roll a sleeve back to its own DTE, same strike, when the days left hit its roll point.",
+            "sleeves": schedule,
         }
 
 
@@ -253,6 +290,7 @@ def rules_for(cfg) -> list:
     return [
         Harvest(drop=cfg.harvest_drop),
         CrashRoll(fraction=cfg.roll_fraction, spot=cfg.spot),
+        KeepTenor(sleeves=tuple(cfg.put_sleeves)),
         WriteCalls(tenors=tenors, lots=cfg.lots, spot=cfg.spot, min_spot_frac=cfg.stagger_min_spot_frac),
         ReplaceAssigned(),
     ]

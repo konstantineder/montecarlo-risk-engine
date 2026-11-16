@@ -28,7 +28,30 @@ FILL_CALL = 27_780.0
 
 
 @dataclass(frozen=True)
+class PutSleeve:
+    """A slice of the protective puts. weight is a fraction of the contracts."""
+
+    weight: float
+    dte: int
+    roll_at: int
+    tag: str
+
+
+def default_put_sleeves() -> tuple[PutSleeve, ...]:
+    """10% is the uncapped lots: 60 days, rolled at 30. The rest is 90 and 180."""
+    return (
+        PutSleeve(0.10, 60, 30, "d60"),
+        PutSleeve(0.40, 90, 45, "d90"),
+        PutSleeve(0.50, 180, 90, "d180"),
+    )
+
+
+@dataclass(frozen=True)
 class Tenor:
+    days: int
+    otm: float
+    contracts: int
+    tag: str
     days: int
     otm: float
     contracts: int
@@ -67,6 +90,7 @@ class BookConfig:
             Tenor(20, 0.10, 10, "w4"),
         )
     )
+    put_sleeves: tuple[PutSleeve, ...] = field(default_factory=default_put_sleeves)
 
 
 @dataclass
@@ -81,6 +105,7 @@ class Leg:
     open: bool = True
     otm: float = 0.0
     tenor: int = 0
+    roll_at: int = 0
 
 
 def _engine_price(spot: float, strike: float, t_years: float, rate: float, sigma: float, kind: str) -> float:
@@ -138,22 +163,49 @@ def _floor(legs: list[Leg]) -> float:
     return sum(leg.qty * CONTRACT * leg.strike for leg in legs if leg.open and leg.side == "long" and leg.kind == "put")
 
 
+def _split_qty(qty: int, weights: list[float]) -> list[int]:
+    """Whole contracts that sum to qty. The leftover goes to the largest remainder."""
+    if qty <= 0:
+        return [0 for _ in weights]
+    raw = [qty * weight for weight in weights]
+    floors = [int(math.floor(value)) for value in raw]
+    left = qty - sum(floors)
+    order = sorted(range(len(raw)), key=lambda i: (raw[i] - floors[i], weights[i]), reverse=True)
+    for index in order[:left]:
+        floors[index] += 1
+    return floors
+
+
 def build_book(cfg: BookConfig) -> dict:
     if cfg.lots < 1:
         raise ValueError("lots must be at least 1")
     if cfg.put_dte < 1:
         raise ValueError("put DTE must be at least 1")
-    puts = (
-        (_qty(60, cfg.lots), cfg.put_dte, _scaled_strike(60.0, cfg.spot), "p60"),
-        (_qty(40, cfg.lots), cfg.put_dte, _scaled_strike(65.0, cfg.spot), "p65"),
+    sleeves = cfg.put_sleeves
+    if not sleeves:
+        raise ValueError("put sleeves are empty")
+    weight_sum = sum(sleeve.weight for sleeve in sleeves)
+    if abs(weight_sum - 1.0) > 0.02:
+        raise ValueError(f"put sleeve weights must sum to 1, not {weight_sum:.3f}")
+    weights = [sleeve.weight / weight_sum for sleeve in sleeves]
+    lines = (
+        (_qty(60, cfg.lots), _scaled_strike(60.0, cfg.spot), "p60"),
+        (_qty(40, cfg.lots), _scaled_strike(65.0, cfg.spot), "p65"),
     )
+    puts = []
+    for qty, strike, name in lines:
+        for sleeve, part in zip(sleeves, _split_qty(qty, weights)):
+            if part <= 0:
+                continue
+            puts.append((part, sleeve.dte, strike, f"{name}-{sleeve.tag}", sleeve.dte, sleeve.roll_at))
+    long_dte = max(sleeve.dte for sleeve in sleeves)
     # Longer calls stay on the 13 Nov strikes. The four weekly lines are
     # struck from the OTM inputs, so those knobs change the opening credit.
     extra = (
         (_qty(12, cfg.lots), 25, _scaled_strike(68.0, cfg.spot), "w5", 0.0),
         (_qty(10, cfg.lots), 30, _scaled_strike(70.0, cfg.spot), "w6", 0.0),
-        (_qty(10, cfg.lots), cfg.put_dte, _scaled_strike(65.0, cfg.spot), "mar65", 0.0),
-        (_qty(10, cfg.lots), cfg.put_dte, _scaled_strike(68.0, cfg.spot), "mar68", 0.0),
+        (_qty(10, cfg.lots), long_dte, _scaled_strike(65.0, cfg.spot), "mar65", 0.0),
+        (_qty(10, cfg.lots), long_dte, _scaled_strike(68.0, cfg.spot), "mar68", 0.0),
     )
     weekly = []
     for tenor in cfg.tenors:
@@ -164,7 +216,7 @@ def build_book(cfg: BookConfig) -> dict:
     put_premium = 0.0
     call_premium = 0.0
     checked = False
-    for qty, expiry, strike, tag in puts:
+    for qty, expiry, strike, tag, tenor, roll_at in puts:
         if qty <= 0:
             continue
         t_years = expiry * DT
@@ -175,7 +227,7 @@ def build_book(cfg: BookConfig) -> dict:
                 raise RuntimeError(f"fast pricer drifted from the engine: {entry} vs {mirror}")
             checked = True
         put_premium += entry * qty * CONTRACT
-        legs.append(Leg("put", "long", strike, qty, expiry, entry, tag, tenor=expiry))
+        legs.append(Leg("put", "long", strike, qty, expiry, entry, tag, tenor=tenor, roll_at=roll_at))
     for qty, expiry, strike, tag, otm in [*weekly, *extra]:
         if qty <= 0 or expiry <= 0:
             continue
@@ -331,7 +383,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
             leg.qty -= order.qty
             if leg.qty <= 0:
                 leg.open = False
-            legs.append(Leg("put", "long", order.strike, order.qty, leg.expiry, premium, order.tag, tenor=leg.tenor))
+            legs.append(Leg("put", "long", order.strike, order.qty, leg.expiry, premium, order.tag, tenor=leg.tenor, roll_at=leg.roll_at))
             day_trades.append({
                 "rule": order.rule,
                 "action": "roll_put",
@@ -375,6 +427,32 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                 "expiry": order.expiry,
                 "premium": round(credit, 4),
                 "tag": order.tag,
+            })
+            return
+        if order.action == "extend_put":
+            leg = order.leg
+            if leg is None or not leg.open or order.qty <= 0 or order.expiry <= t:
+                return
+            mark = _mark(leg, spot, t, cfg.rate, sigma)
+            cash += order.qty * CONTRACT * max(0.0, mark - cfg.slippage)
+            premium = _fast_price(spot, order.strike, (order.expiry - t) * DT, cfg.rate, sigma, "put") + cfg.slippage
+            cash -= order.qty * CONTRACT * premium
+            leg.qty -= order.qty
+            if leg.qty <= 0:
+                leg.open = False
+            legs.append(Leg(
+                "put", "long", order.strike, order.qty, order.expiry, premium, order.tag,
+                tenor=order.tenor, roll_at=order.roll_at,
+            ))
+            day_trades.append({
+                "rule": order.rule,
+                "action": "extend_put",
+                "qty": order.qty,
+                "strike": order.strike,
+                "expiry": order.expiry,
+                "premium": round(premium, 4),
+                "tag": order.tag,
+                "reason": order.reason,
             })
 
     from tqqq_book.strategy import Position, apply, rules_for
@@ -542,7 +620,7 @@ def _vol_view(cfg: BookConfig) -> dict:
 
 def run(cfg: BookConfig | None = None) -> dict:
     cfg = cfg or BookConfig()
-    path_days = min(cfg.horizon_days, cfg.put_dte)
+    path_days = cfg.horizon_days
     book = build_book(cfg)
     spots = _paths(cfg, path_days)
     rows = []
@@ -593,7 +671,7 @@ def run(cfg: BookConfig | None = None) -> dict:
         "note": (
             "Opening premiums are this repo's analytic Black-Scholes at the opening spot, "
             "IV, and each leg's own DTE. They are not the IBKR fill. "
-            "The path is shorter than the put when horizon_days < put_dte, so the put is still marked, not expired. "
+            "Puts are staggered. Each sleeve rolls back to its own DTE when the days left hit its roll point. "
             "Each day the wheel calls strategy.apply on the position. The rules are listed below."
         ),
         "config": {
@@ -602,6 +680,10 @@ def run(cfg: BookConfig | None = None) -> dict:
             "spot": cfg.spot,
             "initial_dte": cfg.put_dte,
             "put_dte": cfg.put_dte,
+            "put_sleeves": [
+                {"weight": sleeve.weight, "dte": sleeve.dte, "roll_at": sleeve.roll_at, "tag": sleeve.tag}
+                for sleeve in cfg.put_sleeves
+            ],
             "horizon_days": cfg.horizon_days,
             "path_days": path_days,
             "put_days_left": max(0, cfg.put_dte - path_days),
@@ -644,6 +726,23 @@ def run(cfg: BookConfig | None = None) -> dict:
     return result
 
 
+def parse_put_sleeves(text: str) -> tuple[PutSleeve, ...]:
+    """'10:60:30,40:90:45,50:180:90' is percent, DTE, roll-at DTE."""
+    sleeves = []
+    for part in str(text).split(","):
+        bits = [piece.strip() for piece in part.split(":") if piece.strip()]
+        if len(bits) != 3:
+            raise ValueError("Each put sleeve is percent:dte:roll, for example 10:60:30")
+        percent, dte, roll_at = float(bits[0]), int(bits[1]), int(bits[2])
+        if percent <= 0 or dte < 1 or roll_at < 1 or roll_at >= dte:
+            raise ValueError(f"Bad put sleeve {part}. Roll DTE has to be shorter than the sleeve.")
+        sleeves.append(PutSleeve(percent / 100.0, dte, roll_at, f"d{dte}"))
+    total = sum(sleeve.weight for sleeve in sleeves)
+    if abs(total - 1.0) > 0.02:
+        raise ValueError(f"Put sleeve percents must sum to 100, not {total * 100:.1f}")
+    return tuple(sleeves)
+
+
 def config_from_mapping(raw: dict | None = None) -> BookConfig:
     """Accept the desk names (putDte, horizonDays) or the Python names."""
     raw = raw or {}
@@ -667,6 +766,11 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
                 return raw[name]
         return default
 
+    sleeves = raw.get("putSleeves", raw.get("put_sleeves"))
+    if isinstance(sleeves, str) and sleeves.strip():
+        put_sleeves = parse_put_sleeves(sleeves)
+    else:
+        put_sleeves = base.put_sleeves
     return BookConfig(
         lots=int(pick("lots", default=base.lots)),
         spot=float(pick("spot", default=base.spot)),
@@ -680,13 +784,15 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
         seed=int(pick("seed", default=base.seed)),
         strategy=str(pick("strategy", default=base.strategy)),
         tenors=tenors,
+        put_sleeves=put_sleeves,
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Price and simulate the configurable TQQQ book.")
     parser.add_argument("--lots", type=int, default=100)
-    parser.add_argument("--put-dte", type=int, default=180, help="Initial DTE of the protective puts you buy.")
+    parser.add_argument("--puts", default="10:60:30,40:90:45,50:180:90", help="Put sleeves as percent:dte:roll. They must sum to 100.")
+    parser.add_argument("--put-dte", type=int, default=180, help="Label for the long hedge. The put sleeves set the actual DTEs.")
     parser.add_argument("--initial-dte", type=int, default=None, help="Same as --put-dte.")
     parser.add_argument("--horizon", type=int, default=100)
     parser.add_argument("--otm", default="0.03,0.05,0.08,0.10", help="1w,2w,3w,4w percent OTM as decimals")
@@ -710,7 +816,14 @@ def main() -> None:
         print(write_report(saved, folder.parent / "tqqq-desk.html"))
         return
     put_dte = args.initial_dte if args.initial_dte is not None else args.put_dte
-    result = run(config_from_mapping(vars(args) | {"horizon_days": args.horizon, "put_dte": put_dte, "initial_dte": put_dte, "vol": args.vol, "drift": args.drift}))
+    result = run(config_from_mapping(vars(args) | {
+        "horizon_days": args.horizon,
+        "put_dte": put_dte,
+        "initial_dte": put_dte,
+        "vol": args.vol,
+        "drift": args.drift,
+        "put_sleeves": args.puts,
+    }))
     if args.report:
         from tqqq_book.report import write_report
         print(write_report(result, args.report))

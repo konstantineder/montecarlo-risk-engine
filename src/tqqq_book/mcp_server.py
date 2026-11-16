@@ -19,7 +19,8 @@ CONFIG = {
     "properties": {
         "lots": {"type": "number", "description": "100-share lots. Default 100, which is 10,000 shares."},
         "spot": {"type": "number", "description": "TQQQ spot. Default 59.22."},
-        "putDte": {"type": "number", "description": "Initial DTE of the protective puts. Alias of initialDte. Default 180. Independent of the path length."},
+        "putDte": {"type": "number", "description": "Label for the long hedge. The put sleeves set the actual DTEs."},
+        "putSleeves": {"type": "string", "description": "Put sleeves as percent:dte:roll, summing to 100. Default 10:60:30,40:90:45,50:180:90. The 10% is the uncapped lots."},
         "initialDte": {"type": "number", "description": "Initial DTE of the puts you buy. Same as putDte. Default 180."},
         "horizonDays": {"type": "number", "description": "Trading days to simulate. Default 100. The put is marked for whatever life is left."},
         "iv": {"type": "number", "description": "Opening implied vol. Default 0.71. Premiums use this, not the IBKR fill."},
