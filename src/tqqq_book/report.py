@@ -428,33 +428,72 @@ function unpackLine(row) {
   if (!row || row.name) return row;
   return {name: row[0], side: row[1], qty: row[2], strike: row[3], expiry: row[4], tag: row[5], cost: row[6], mark: row[7], mtm: row[8]};
 }
-function positionTable(rows) {
+function lineKey(row) {
+  return [row.name, row.side || "", row.strike == null ? "" : row.strike, row.expiry == null ? "" : row.expiry, row.tag || ""].join("|");
+}
+function pctText(value) {
+  if (value == null || !isFinite(value)) return "";
+  return (value > 0 ? "+" : "") + (value * 100).toFixed(1) + "%";
+}
+function withChange(rows, priorRows) {
+  const prior = new Map((priorRows || []).map(unpackLine).map((row) => [lineKey(row), row]));
+  const lines = (rows || []).map(unpackLine).map((row) => {
+    const old = prior.get(lineKey(row));
+    const prev = old ? Number(old.mtm) : 0;
+    const delta = Number(row.mtm) - prev;
+    prior.delete(lineKey(row));
+    return Object.assign({}, row, {delta: delta, pct: prev === 0 ? null : delta / Math.abs(prev)});
+  });
+  prior.forEach((old) => {
+    lines.push(Object.assign({}, old, {qty: 0, mark: 0, mtm: 0, delta: -Number(old.mtm), pct: Number(old.mtm) === 0 ? null : -1, gone: true}));
+  });
+  return lines;
+}
+function positionTable(rows, priorRows) {
+  const lines = withChange(rows, priorRows);
   const table = document.createElement("table");
   const head = document.createElement("thead");
   const hr = document.createElement("tr");
-  ["Name", "Side", "Qty", "Strike", "Expiry", "Cost", "Mark", "MTM"].forEach((label) => {
+  ["Name", "Side", "Qty", "Strike", "Expiry", "Cost", "Mark", "MTM", "Day $", "Day %"].forEach((label) => {
     const th = document.createElement("th");
     th.textContent = label;
     hr.append(th);
   });
   head.append(hr);
   const body = document.createElement("tbody");
-  (rows || []).map(unpackLine).forEach((row) => {
+  let total = 0;
+  let totalDelta = 0;
+  lines.forEach((row) => {
+    total += Number(row.mtm) || 0;
+    totalDelta += Number(row.delta) || 0;
     const tr = document.createElement("tr");
     [
-      row.name,
+      row.gone ? row.name + " closed" : row.name,
       row.side || "",
       String(row.qty),
       row.strike == null ? "" : px(row.strike),
       row.expiry == null ? "" : String(row.expiry),
       costText(row),
       markText(row),
-      money(row.mtm)
+      money(row.mtm),
+      money(row.delta),
+      pctText(row.pct)
     ].forEach((text) => tr.append(cell(text)));
     body.append(tr);
   });
-  table.append(head, body);
+  const foot = document.createElement("tfoot");
+  const fr = document.createElement("tr");
+  const priorTotal = total - totalDelta;
+  const bookPct = priorTotal === 0 ? null : totalDelta / Math.abs(priorTotal);
+  ["Book", "", "", "", "", "", "", money(total), money(totalDelta), pctText(bookPct)].forEach((text) => fr.append(cell(text)));
+  foot.append(fr);
+  table.append(head, body, foot);
   return table;
+}
+function priorBook(dayNum) {
+  if (!current || dayNum <= 0) return [];
+  const prev = current.days.find((day) => day.day === dayNum - 1);
+  return prev ? prev.position : [];
 }
 function renderBook() {
   const host = document.getElementById("book");
@@ -462,8 +501,11 @@ function renderBook() {
   if (!selectedDay) return;
   const title = document.createElement("h2");
   title.textContent = "Day " + selectedDay.day + " close";
-  host.append(title);
-  host.append(positionTable(selectedDay.position));
+  const note = document.createElement("p");
+  note.textContent = "MTM is the value of that line. The book row is the sum, which is the P&L. Day $ and Day % are versus the prior day's close.";
+  host.append(title, note);
+  const prior = priorBook(selectedDay.day);
+  host.append(positionTable(selectedDay.position, prior));
   (selectedDay.steps || []).forEach((step) => {
     const details = document.createElement("details");
     details.open = true;
@@ -476,11 +518,11 @@ function renderBook() {
     const before = document.createElement("div");
     const beforeTitle = document.createElement("h3");
     beforeTitle.textContent = "Before";
-    before.append(beforeTitle, positionTable(step.before));
+    before.append(beforeTitle, positionTable(step.before, prior));
     const after = document.createElement("div");
     const afterTitle = document.createElement("h3");
     afterTitle.textContent = "After";
-    after.append(afterTitle, positionTable(step.after));
+    after.append(afterTitle, positionTable(step.after, prior));
     details.append(trades, before, after);
     host.append(details);
   });
