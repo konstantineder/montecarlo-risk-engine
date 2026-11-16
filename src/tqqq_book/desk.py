@@ -336,6 +336,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                 shares += qty_shares
                 action = "assign_put"
             day_trades.append({
+                "rule": "settle",
                 "action": action,
                 "kind": leg.kind,
                 "side": leg.side,
@@ -455,15 +456,55 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                 "reason": order.reason,
             })
 
-    from tqqq_book.strategy import Position, apply, rules_for
+    from tqqq_book.strategy import Position, rules_for
     rules = rules_for(cfg) if strategy == "wheel" else []
+
+    def snap(at_spot: float, at_t: int, at_sigma: float) -> list[dict]:
+        rows = [
+            {
+                "name": "share",
+                "side": "long",
+                "qty": shares,
+                "cost": round(cfg.spot, 4),
+                "mark": round(at_spot, 4),
+                "mtm": round(shares * at_spot, 2),
+            },
+            {
+                "name": "cash",
+                "qty": 1,
+                "cost": 0.0,
+                "mark": round(cash, 2),
+                "mtm": round(cash, 2),
+            },
+        ]
+        for leg in legs:
+            if not leg.open or leg.qty <= 0:
+                continue
+            mark = _mark(leg, at_spot, at_t, cfg.rate, at_sigma)
+            sign = 1.0 if leg.side == "long" else -1.0
+            rows.append({
+                "name": leg.kind,
+                "side": leg.side,
+                "qty": leg.qty,
+                "strike": leg.strike,
+                "expiry": leg.expiry,
+                "tag": leg.tag,
+                "cost": round(leg.entry, 4),
+                "mark": round(mark, 4),
+                "mtm": round(sign * mark * leg.qty * CONTRACT, 2),
+            })
+        return rows
 
     for t, spot in enumerate(path):
         spot = float(spot)
         day_trades = []
+        steps: list[dict] = []
         min_spot = min(min_spot, spot)
         sigma = _iv_at(spot, cfg.spot, cfg.iv, cfg.iv_elasticity)
+        before = snap(spot, t, sigma)
         settle(t, spot)
+        if day_trades:
+            steps.append({"rule": "settle", "trades": list(day_trades), "before": before, "after": snap(spot, t, sigma)})
         if t < last and rules:
             position = Position(
                 day=t,
@@ -480,7 +521,18 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                     spot, strike, max(0, expiry - t) * DT, cfg.rate, sigma, kind
                 ),
             )
-            apply(position, rules, execute)
+            for rule in rules:
+                before = snap(spot, t, sigma)
+                start = len(day_trades)
+                for order in rule.apply(position):
+                    execute(order)
+                if len(day_trades) > start:
+                    steps.append({
+                        "rule": rule.name,
+                        "trades": day_trades[start:],
+                        "before": before,
+                        "after": snap(spot, t, sigma),
+                    })
             wheel = position.assigned
             rolled = position.rolled
         mtm = cash + shares * spot
@@ -502,6 +554,8 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
             "iv": round(sigma, 4),
             "shares": shares,
             "trades": day_trades,
+            "position": snap(spot, t, sigma),
+            "steps": steps,
         })
 
     return {

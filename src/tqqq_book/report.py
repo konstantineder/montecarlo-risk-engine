@@ -52,6 +52,42 @@ def _load_paths(result: dict) -> list[dict]:
     return []
 
 
+def _pack_line(row: dict) -> list:
+    return [
+        row.get("name"),
+        row.get("side") or "",
+        row.get("qty"),
+        row.get("strike"),
+        row.get("expiry"),
+        row.get("tag") or "",
+        row.get("cost"),
+        row.get("mark"),
+        row.get("mtm"),
+    ]
+
+
+def _pack_day(day: dict) -> dict:
+    return {
+        "day": day["day"],
+        "price": day["price"],
+        "pnl": day["pnl"],
+        "mtm": day["mtm"],
+        "iv": day["iv"],
+        "shares": day["shares"],
+        "trades": day.get("trades") or [],
+        "position": [_pack_line(row) for row in day.get("position") or []],
+        "steps": [
+            {
+                "rule": step["rule"],
+                "trades": step.get("trades") or [],
+                "before": [_pack_line(row) for row in step.get("before") or []],
+                "after": [_pack_line(row) for row in step.get("after") or []],
+            }
+            for step in day.get("steps") or []
+        ],
+    }
+
+
 def _slim(paths: list[dict]) -> list[dict]:
     kept = []
     for row in paths:
@@ -67,7 +103,7 @@ def _slim(paths: list[dict]) -> list[dict]:
             "new_calls": row["new_calls"],
             "roll_cash": row["roll_cash"],
             "mtm": last.get("mtm", 0.0),
-            "days": row["days"],
+            "days": [_pack_day(day) for day in row.get("days") or []],
         })
     return kept
 
@@ -142,6 +178,9 @@ def write_report(result: dict, path: str | Path) -> str:
   .grid tbody tr { cursor: pointer; }
   .grid tbody tr:hover { background: #241f19; }
   .grid tr.on { background: #2c261e; }
+  details { margin: 14px 0 22px; }
+  summary { cursor: pointer; font-size: 15px; }
+  #book h3 { margin: 12px 0 6px; font-size: 13px; font-weight: 500; color: #9c9486; }
   td.trades { color: #e6d3a3; white-space: normal; }
   .detail { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #3a342b; border-radius: 12px; overflow: hidden; margin: 12px 0; }
 </style>
@@ -204,7 +243,7 @@ def write_report(result: dict, path: str | Path) -> str:
         <tbody id="trades"></tbody>
       </table>
     </div>
-    <p id="day-sort">Every day, from day 0 to the end. Sort by day, spot, or P&L.</p>
+    <p id="day-sort">Every day, from day 0 to the end. Click a day for the position and the rules.</p>
     <div class="grid">
       <table>
         <thead>
@@ -221,6 +260,7 @@ def write_report(result: dict, path: str | Path) -> str:
         <tbody id="days"></tbody>
       </table>
     </div>
+    <div id="book"></div>
   </section>
   <section>
     <h2>Opening trades</h2>
@@ -305,6 +345,7 @@ function renderPaths() {
       current = row;
       dayKey = "day";
       dayDir = 1;
+      selectedDayNum = null;
       document.querySelectorAll("#paths tr").forEach((el) => el.classList.remove("on"));
       tr.classList.add("on");
       renderDays();
@@ -371,6 +412,79 @@ function chart(days, key) {
   return '<svg viewBox="0 0 ' + width + " " + height + '" role="img">' + grid + zero +
     '<polyline points="' + line + '" fill="none" stroke="#e6d3a3" stroke-width="1.8"/>' + dots + "</svg>";
 }
+let selectedDayNum = null;
+let selectedDay = null;
+function costText(row) {
+  if (row.name === "cash") return "";
+  if (row.name === "share") return px(row.cost);
+  return Number(row.cost).toFixed(2);
+}
+function markText(row) {
+  if (row.name === "cash") return money(row.mark);
+  if (row.name === "share") return px(row.mark);
+  return Number(row.mark).toFixed(2);
+}
+function unpackLine(row) {
+  if (!row || row.name) return row;
+  return {name: row[0], side: row[1], qty: row[2], strike: row[3], expiry: row[4], tag: row[5], cost: row[6], mark: row[7], mtm: row[8]};
+}
+function positionTable(rows) {
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const hr = document.createElement("tr");
+  ["Name", "Side", "Qty", "Strike", "Expiry", "Cost", "Mark", "MTM"].forEach((label) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    hr.append(th);
+  });
+  head.append(hr);
+  const body = document.createElement("tbody");
+  (rows || []).map(unpackLine).forEach((row) => {
+    const tr = document.createElement("tr");
+    [
+      row.name,
+      row.side || "",
+      String(row.qty),
+      row.strike == null ? "" : px(row.strike),
+      row.expiry == null ? "" : String(row.expiry),
+      costText(row),
+      markText(row),
+      money(row.mtm)
+    ].forEach((text) => tr.append(cell(text)));
+    body.append(tr);
+  });
+  table.append(head, body);
+  return table;
+}
+function renderBook() {
+  const host = document.getElementById("book");
+  host.replaceChildren();
+  if (!selectedDay) return;
+  const title = document.createElement("h2");
+  title.textContent = "Day " + selectedDay.day + " close";
+  host.append(title);
+  host.append(positionTable(selectedDay.position));
+  (selectedDay.steps || []).forEach((step) => {
+    const details = document.createElement("details");
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = step.rule + " · " + step.trades.length + " trade" + (step.trades.length === 1 ? "" : "s");
+    details.append(summary);
+    const trades = document.createElement("p");
+    trades.className = "trades";
+    trades.textContent = tradeText(step.trades);
+    const before = document.createElement("div");
+    const beforeTitle = document.createElement("h3");
+    beforeTitle.textContent = "Before";
+    before.append(beforeTitle, positionTable(step.before));
+    const after = document.createElement("div");
+    const afterTitle = document.createElement("h3");
+    afterTitle.textContent = "After";
+    after.append(afterTitle, positionTable(step.after));
+    details.append(trades, before, after);
+    host.append(details);
+  });
+}
 function renderDays() {
   const title = document.getElementById("detail-title");
   const facts = document.getElementById("detail-facts");
@@ -383,9 +497,14 @@ function renderDays() {
   charts.replaceChildren();
   if (!current) {
     title.textContent = "Path";
+    selectedDay = null;
+    renderBook();
     return;
   }
   title.textContent = "Path " + current.path;
+  if (selectedDayNum == null) selectedDayNum = current.days[current.days.length - 1].day;
+  selectedDay = current.days.find((day) => day.day === selectedDayNum) || current.days[current.days.length - 1];
+  selectedDayNum = selectedDay.day;
   const spotCard = document.createElement("div");
   const pnlCard = document.createElement("div");
   spotCard.innerHTML = "<h3>Spot. Left is the price, bottom is the day. Dots are trades.</h3>" + chart(current.days, "price");
@@ -417,12 +536,15 @@ function renderDays() {
   const ordered = current.days.slice().sort((a, b) => a.day - b.day);
   ordered.filter((day) => day.trades.length).forEach((day) => {
     const tr = document.createElement("tr");
+    if (day.day === selectedDayNum) tr.className = "on";
     tr.append(cell(String(day.day)), cell(px(day.price)), cell(money(day.pnl)), cell(tradeText(day.trades), "trades"));
+    tr.addEventListener("click", () => selectDay(day.day));
     trades.append(tr);
   });
   const days = current.days.slice().sort((a, b) => (a[dayKey] - b[dayKey]) * dayDir);
   days.forEach((day) => {
     const tr = document.createElement("tr");
+    if (day.day === selectedDayNum) tr.className = "on";
     tr.append(
       cell(String(day.day)),
       cell(px(day.price)),
@@ -432,9 +554,20 @@ function renderDays() {
       cell(String(day.shares)),
       cell(tradeText(day.trades), "trades")
     );
+    tr.addEventListener("click", () => selectDay(day.day));
     body.append(tr);
   });
   mark("days", dayKey, dayDir);
+  renderBook();
+}
+function selectDay(dayNum) {
+  selectedDayNum = dayNum;
+  selectedDay = current.days.find((day) => day.day === dayNum) || null;
+  document.querySelectorAll("#days tr, #trades tr").forEach((row) => {
+    const first = row.firstChild;
+    row.classList.toggle("on", first && first.textContent === String(dayNum));
+  });
+  renderBook();
 }
 document.querySelectorAll("th[data-key]").forEach((th) => {
   th.addEventListener("click", () => {
