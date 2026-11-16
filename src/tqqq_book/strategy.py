@@ -243,42 +243,35 @@ class WriteCalls:
 
 @dataclass(frozen=True)
 class ReplaceAssigned:
-    """After a call takes shares, sell a put under that call, only for stock the long puts still cover."""
+    """While the long puts cover more than the shares, keep selling a short put under the spot."""
 
+    otm: float = 0.05
+    tenor: int = 10
     name: str = "replace_assigned"
 
     def apply(self, position: Position) -> list[Order]:
-        if not position.assigned:
-            return []
         protected = sum(leg.qty for leg in position.legs if leg.open and leg.kind == "put" and leg.side == "long")
         short_puts = sum(leg.qty for leg in position.legs if leg.open and leg.kind == "put" and leg.side == "short")
         room = protected - int(position.shares // CONTRACT) - short_puts
-        orders = []
-        still = []
-        for qty, call_strike, otm, tenor_days in position.assigned:
-            take = min(qty, max(0, room))
-            if take <= 0:
-                still.append((qty, call_strike, otm, tenor_days))
-                continue
-            mirror = otm if otm > 0 else 0.05
-            strike = float(max(1, round(call_strike * (1.0 - mirror))))
-            if strike >= call_strike:
-                strike = max(1.0, call_strike - 1.0)
-            expiry = min(position.last, position.day + max(5, tenor_days))
-            if expiry <= position.day:
-                still.append((qty, call_strike, otm, tenor_days))
-                continue
-            orders.append(Order(self.name, "sell_put", take, strike, expiry, "reenter", otm=mirror, tenor=tenor_days))
-            room -= take
-            if take < qty:
-                still.append((qty - take, call_strike, otm, tenor_days))
-        position.assigned = still
-        return orders
+        position.assigned = []
+        if room <= 0:
+            return []
+        strike = float(max(1, round(position.spot * (1.0 - self.otm))))
+        expiry = min(position.last, position.day + self.tenor)
+        if expiry <= position.day:
+            return []
+        return [Order(
+            self.name, "sell_put", room, strike, expiry, "reenter",
+            otm=self.otm, tenor=self.tenor,
+            reason=f"{room} lots under spot",
+        )]
 
     def describe(self) -> dict:
         return {
             "name": self.name,
-            "says": "If a call took shares, sell a put under that call, and only while the long puts still cover more than the shares.",
+            "says": "While the long puts cover more shares than you hold, sell a short put under the current spot. Sell another when that one expires.",
+            "otm": self.otm,
+            "tenor": self.tenor,
         }
 
 
