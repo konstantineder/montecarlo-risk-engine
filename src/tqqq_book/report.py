@@ -303,11 +303,23 @@ function renderPaths() {
   document.getElementById("path-sort").textContent =
     paths.length + " paths. Sorted by " + pathKey + (pathDir > 0 ? ", low to high." : ", high to low.") + " Click a row for every day.";
 }
+function axisMoney(value) {
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (abs >= 1000) return sign + "$" + Math.round(abs).toLocaleString("en-US");
+  return sign + "$" + abs.toFixed(0);
+}
+function axisSpot(value) {
+  return value.toFixed(1);
+}
 function chart(days, key) {
   const ordered = days.slice().sort((a, b) => a.day - b.day);
   const width = 1040;
-  const height = 220;
-  const pad = 28;
+  const height = 280;
+  const left = 78;
+  const right = 16;
+  const top = 16;
+  const bottom = 32;
   const values = ordered.map((day) => day[key]);
   let low = Math.min.apply(null, values);
   let high = Math.max.apply(null, values);
@@ -315,19 +327,37 @@ function chart(days, key) {
     low = Math.min(low, 0);
     high = Math.max(high, 0);
   }
-  if (high === low) high = low + 1;
+  const span = high - low || 1;
+  low -= span * 0.06;
+  high += span * 0.06;
   const lastDay = ordered[ordered.length - 1].day || 1;
-  const x = (day) => pad + (day / lastDay) * (width - pad * 2);
-  const y = (value) => height - pad - ((value - low) / (high - low)) * (height - pad * 2);
+  const x = (day) => left + (day / lastDay) * (width - left - right);
+  const y = (value) => top + (1 - (value - low) / (high - low)) * (height - top - bottom);
+  const label = key === "pnl" ? axisMoney : axisSpot;
+  const yTicks = 5;
+  const xTicks = Math.min(6, lastDay);
+  let grid = "";
+  for (let i = 0; i < yTicks; i += 1) {
+    const value = low + ((high - low) * i) / (yTicks - 1);
+    const yy = y(value);
+    grid += '<line x1="' + left + '" y1="' + yy.toFixed(1) + '" x2="' + (width - right) + '" y2="' + yy.toFixed(1) + '" stroke="#3a342b"/>';
+    grid += '<text x="' + (left - 8) + '" y="' + (yy + 4).toFixed(1) + '" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace, monospace">' + label(value) + "</text>";
+  }
+  for (let i = 0; i < xTicks; i += 1) {
+    const day = Math.round((lastDay * i) / (xTicks - 1));
+    const xx = x(day);
+    grid += '<line x1="' + xx.toFixed(1) + '" y1="' + top + '" x2="' + xx.toFixed(1) + '" y2="' + (height - bottom) + '" stroke="#2a261f"/>';
+    grid += '<text x="' + xx.toFixed(1) + '" y="' + (height - 10) + '" text-anchor="middle" fill="#9c9486" font-size="11" font-family="ui-monospace, monospace">' + day + "</text>";
+  }
   const line = ordered.map((day) => x(day.day).toFixed(1) + "," + y(day[key]).toFixed(1)).join(" ");
   const dots = ordered.filter((day) => day.trades.length).map((day) =>
-    '<circle cx="' + x(day.day).toFixed(1) + '" cy="' + y(day[key]).toFixed(1) + '" r="3.2" fill="#e6d3a3"><title>Day ' + day.day + "</title></circle>"
+    '<circle cx="' + x(day.day).toFixed(1) + '" cy="' + y(day[key]).toFixed(1) + '" r="3.4" fill="#f3efe4" stroke="#14120e" stroke-width="1"><title>Day ' + day.day + " " + label(day[key]) + "</title></circle>"
   ).join("");
-  const zero = low <= 0 && high >= 0
-    ? '<line x1="' + pad + '" y1="' + y(0).toFixed(1) + '" x2="' + (width - pad) + '" y2="' + y(0).toFixed(1) + '" stroke="#5c5648" stroke-dasharray="3 4"/>'
+  const zero = key === "pnl" && low <= 0 && high >= 0
+    ? '<line x1="' + left + '" y1="' + y(0).toFixed(1) + '" x2="' + (width - right) + '" y2="' + y(0).toFixed(1) + '" stroke="#8a8172" stroke-dasharray="3 4"/>'
     : "";
-  return '<svg viewBox="0 0 ' + width + " " + height + '" role="img">' + zero +
-    '<polyline points="' + line + '" fill="none" stroke="#e6d3a3" stroke-width="1.6"/>' + dots + "</svg>";
+  return '<svg viewBox="0 0 ' + width + " " + height + '" role="img">' + grid + zero +
+    '<polyline points="' + line + '" fill="none" stroke="#e6d3a3" stroke-width="1.8"/>' + dots + "</svg>";
 }
 function renderDays() {
   const title = document.getElementById("detail-title");
@@ -346,8 +376,8 @@ function renderDays() {
   title.textContent = "Path " + current.path;
   const spotCard = document.createElement("div");
   const pnlCard = document.createElement("div");
-  spotCard.innerHTML = "<h3>Spot, day 0 to the end. Dots are trade days.</h3>" + chart(current.days, "price");
-  pnlCard.innerHTML = "<h3>P&L, same days. The dashed line is zero.</h3>" + chart(current.days, "pnl");
+  spotCard.innerHTML = "<h3>Spot. Left is the price, bottom is the day. Dots are trades.</h3>" + chart(current.days, "price");
+  pnlCard.innerHTML = "<h3>P&L. Left is dollars, bottom is the same day. Dashed line is zero.</h3>" + chart(current.days, "pnl");
   charts.append(spotCard, pnlCard);
   [
     ["Index", String(current.path)],
