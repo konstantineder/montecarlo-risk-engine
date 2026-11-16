@@ -243,11 +243,12 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
     buybacks = 0
     new_calls = 0
     assignments = 0
-    monetized = False
+    rolled = False
     roll_cash = 0.0
     min_spot = float(path[0])
     wheel: list[tuple[int, float, float, int]] = []
     write_floor = 52.0 * cfg.spot / REF_SPOT
+    crash_trigger = 45.0 * cfg.spot / REF_SPOT
     uncapped = int(round(1000 * cfg.lots / REF_LOTS))
     last = len(path) - 1
     peak = book["deployed"]
@@ -314,52 +315,81 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
             "tag": tag,
         })
 
-    def monetize(t: int, spot: float, sigma: float) -> None:
-        nonlocal cash, monetized, roll_cash, write_floor
-        if monetized:
+    def buy_back(t: int, spot: float, sigma: float, leg: Leg) -> None:
+        nonlocal cash, buybacks
+        if not leg.open or leg.qty <= 0:
             return
-        closed: list[Leg] = []
-        realized = 0.0
+        mark = _mark(leg, spot, t, cfg.rate, sigma)
+        cash -= leg.qty * CONTRACT * (mark + cfg.slippage)
+        buybacks += 1
+        day_trades.append({
+            "action": "buy_call",
+            "qty": leg.qty,
+            "strike": leg.strike,
+            "premium": round(mark + cfg.slippage, 4),
+            "tag": leg.tag,
+            "reason": "harvest",
+        })
+        leg.open = False
+
+    def harvest(t: int, spot: float, sigma: float) -> None:
+        if cfg.harvest_drop <= 0 or spot > cfg.spot * (1.0 - cfg.harvest_drop):
+            return
+        for leg in list(legs):
+            if not (leg.open and leg.side == "short" and leg.kind == "call"):
+                continue
+            mark = _mark(leg, spot, t, cfg.rate, sigma)
+            if leg.entry > 0 and mark <= 0.5 * leg.entry:
+                buy_back(t, spot, sigma, leg)
+
+    def roll_puts(t: int, spot: float, sigma: float) -> None:
+        """Roll only roll_fraction down $10. The rest of the puts stay on the shares."""
+        nonlocal cash, rolled, roll_cash
+        if rolled or cfg.roll_fraction <= 0:
+            rolled = True
+            return
+        released = 0.0
         for leg in list(legs):
             if not (leg.open and leg.side == "long" and leg.kind == "put"):
                 continue
+            roll_qty = int(leg.qty * cfg.roll_fraction)
+            if roll_qty <= 0:
+                continue
             mark = _mark(leg, spot, t, cfg.rate, sigma)
-            premium = max(0.0, mark - cfg.slippage)
-            proceeds = leg.qty * CONTRACT * premium
+            proceeds = roll_qty * CONTRACT * max(0.0, mark - cfg.slippage)
             cash += proceeds
-            realized += proceeds
-            leg.open = False
-            closed.append(leg)
+            released += proceeds
+            leg.qty -= roll_qty
+            if leg.qty <= 0:
+                leg.open = False
+            new_strike = float(max(1, round(leg.strike - 10)))
+            new_mark = _fast_price(spot, new_strike, max(0, leg.expiry - t) * DT, cfg.rate, sigma, "put")
+            premium = new_mark + cfg.slippage
+            cash -= roll_qty * CONTRACT * premium
+            released -= roll_qty * CONTRACT * premium
+            legs.append(Leg("put", "long", new_strike, roll_qty, leg.expiry, premium, f"roll{int(new_strike)}", otm=cfg.new_put_otm, tenor=leg.tenor))
             day_trades.append({
-                "action": "sell_put",
-                "qty": leg.qty,
-                "strike": leg.strike,
+                "action": "roll_put",
+                "qty": roll_qty,
+                "strike": new_strike,
                 "premium": round(premium, 4),
-                "tag": leg.tag,
-                "reason": "monetize",
+                "tag": f"roll{int(new_strike)}",
+                "reason": f"from {leg.strike:.0f}",
             })
-        monetized = True
-        if not closed:
-            return
-        total_qty = sum(leg.qty for leg in closed)
-        expiry = closed[0].expiry
-        new_strike = float(max(1, round(spot * (1.0 - cfg.new_put_otm))))
-        new_mark = _fast_price(spot, new_strike, max(0, expiry - t) * DT, cfg.rate, sigma, "put")
-        premium = new_mark + cfg.slippage
-        cost = total_qty * CONTRACT * premium
-        cash -= cost
-        legs.append(Leg("put", "long", new_strike, total_qty, expiry, premium, f"monetized{int(new_strike)}", otm=cfg.new_put_otm, tenor=expiry))
-        day_trades.append({
-            "action": "buy_put",
-            "qty": total_qty,
-            "strike": new_strike,
-            "expiry": expiry,
-            "premium": round(premium, 4),
-            "tag": f"monetized{int(new_strike)}",
-            "reason": "monetize",
-        })
-        roll_cash += realized - cost
-        write_floor = min(write_floor, spot * cfg.write_floor_after_monetize)
+        rolled = True
+        roll_cash += released
+
+    def protective_strike() -> float:
+        """Calls cannot be struck below the puts that are still on the shares."""
+        original = [
+            leg.strike
+            for leg in legs
+            if leg.open and leg.side == "long" and leg.kind == "put" and leg.qty > 0 and not str(leg.tag).startswith("roll")
+        ]
+        if original:
+            return min(original)
+        rolled_strikes = [leg.strike for leg in legs if leg.open and leg.side == "long" and leg.kind == "put" and leg.qty > 0]
+        return min(rolled_strikes) if rolled_strikes else 0.0
 
     for t, spot in enumerate(path):
         spot = float(spot)
@@ -368,17 +398,21 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
         sigma = _iv_at(spot, cfg.spot, cfg.iv, cfg.iv_elasticity)
         settle(t, spot)
         if t < last and strategy == "wheel":
-            if not monetized and cfg.put_monetize_drop > 0 and spot <= cfg.spot * (1.0 - cfg.put_monetize_drop):
-                monetize(t, spot, sigma)
+            harvest(t, spot, sigma)
+            if not rolled and spot <= crash_trigger:
+                roll_puts(t, spot, sigma)
             due = t > 0 and t % 5 == 0 and spot >= min(write_floor, spot * cfg.stagger_min_spot_frac)
             if due:
                 room = max(0, int((shares - _cover(legs) - uncapped) // CONTRACT))
+                floor_strike = protective_strike()
                 for tenor in cfg.tenors:
                     have = sum(leg.qty for leg in legs if leg.open and leg.side == "short" and leg.kind == "call" and leg.tag == tenor.tag)
                     need = min(max(0, _qty(tenor.contracts, cfg.lots) - have), room)
                     if need <= 0 or t + tenor.days >= len(path):
                         continue
                     strike = float(max(1, round(spot * (1.0 + tenor.otm))))
+                    if floor_strike and strike < floor_strike:
+                        continue
                     sell_call(t, spot, sigma, need, strike, t + tenor.days, tenor.tag, tenor.otm, tenor.days)
                     room -= need
                     if room <= 0:
