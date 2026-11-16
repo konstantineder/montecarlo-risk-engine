@@ -131,6 +131,8 @@ def write_report(result: dict, path: str | Path) -> str:
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #3a342b; white-space: nowrap; }
   th { color: #9c9486; font-weight: 500; }
   svg { width: 100%; height: auto; background: #1c1915; border-radius: 12px; }
+  #charts { display: grid; gap: 14px; margin: 14px 0; }
+  #charts h3 { margin: 0 0 6px; font-size: 15px; font-weight: 500; }
   .grid { max-height: 440px; overflow: auto; border: 1px solid #3a342b; border-radius: 12px; }
   .grid th { position: sticky; top: 0; background: #221e19; cursor: pointer; z-index: 1; }
   .grid tbody tr { cursor: pointer; }
@@ -182,7 +184,15 @@ def write_report(result: dict, path: str | Path) -> str:
   <section>
     <h2 id="detail-title">Path</h2>
     <div class="detail" id="detail-facts"></div>
-    <p id="day-sort">Days for the path you clicked. Sort by day, spot, or P&L.</p>
+    <div id="charts"></div>
+    <h2>Trades on this path</h2>
+    <div class="grid">
+      <table>
+        <thead><tr><th>Day</th><th>Spot</th><th>P&L</th><th>Trades</th></tr></thead>
+        <tbody id="trades"></tbody>
+      </table>
+    </div>
+    <p id="day-sort">Every day, from day 0 to the end. Sort by day, spot, or P&L.</p>
     <div class="grid">
       <table>
         <thead>
@@ -293,17 +303,52 @@ function renderPaths() {
   document.getElementById("path-sort").textContent =
     paths.length + " paths. Sorted by " + pathKey + (pathDir > 0 ? ", low to high." : ", high to low.") + " Click a row for every day.";
 }
+function chart(days, key) {
+  const ordered = days.slice().sort((a, b) => a.day - b.day);
+  const width = 1040;
+  const height = 220;
+  const pad = 28;
+  const values = ordered.map((day) => day[key]);
+  let low = Math.min.apply(null, values);
+  let high = Math.max.apply(null, values);
+  if (key === "pnl") {
+    low = Math.min(low, 0);
+    high = Math.max(high, 0);
+  }
+  if (high === low) high = low + 1;
+  const lastDay = ordered[ordered.length - 1].day || 1;
+  const x = (day) => pad + (day / lastDay) * (width - pad * 2);
+  const y = (value) => height - pad - ((value - low) / (high - low)) * (height - pad * 2);
+  const line = ordered.map((day) => x(day.day).toFixed(1) + "," + y(day[key]).toFixed(1)).join(" ");
+  const dots = ordered.filter((day) => day.trades.length).map((day) =>
+    '<circle cx="' + x(day.day).toFixed(1) + '" cy="' + y(day[key]).toFixed(1) + '" r="3.2" fill="#e6d3a3"><title>Day ' + day.day + "</title></circle>"
+  ).join("");
+  const zero = low <= 0 && high >= 0
+    ? '<line x1="' + pad + '" y1="' + y(0).toFixed(1) + '" x2="' + (width - pad) + '" y2="' + y(0).toFixed(1) + '" stroke="#5c5648" stroke-dasharray="3 4"/>'
+    : "";
+  return '<svg viewBox="0 0 ' + width + " " + height + '" role="img">' + zero +
+    '<polyline points="' + line + '" fill="none" stroke="#e6d3a3" stroke-width="1.6"/>' + dots + "</svg>";
+}
 function renderDays() {
   const title = document.getElementById("detail-title");
   const facts = document.getElementById("detail-facts");
+  const charts = document.getElementById("charts");
+  const trades = document.getElementById("trades");
   const body = document.getElementById("days");
   body.replaceChildren();
   facts.replaceChildren();
+  trades.replaceChildren();
+  charts.replaceChildren();
   if (!current) {
     title.textContent = "Path";
     return;
   }
   title.textContent = "Path " + current.path;
+  const spotCard = document.createElement("div");
+  const pnlCard = document.createElement("div");
+  spotCard.innerHTML = "<h3>Spot, day 0 to the end. Dots are trade days.</h3>" + chart(current.days, "price");
+  pnlCard.innerHTML = "<h3>P&L, same days. The dashed line is zero.</h3>" + chart(current.days, "pnl");
+  charts.append(spotCard, pnlCard);
   [
     ["Index", String(current.path)],
     ["End spot", px(current.ending_spot)],
@@ -326,6 +371,12 @@ function renderDays() {
     strong.textContent = pair[1];
     fact.append(span, strong);
     facts.append(fact);
+  });
+  const ordered = current.days.slice().sort((a, b) => a.day - b.day);
+  ordered.filter((day) => day.trades.length).forEach((day) => {
+    const tr = document.createElement("tr");
+    tr.append(cell(String(day.day)), cell(px(day.price)), cell(money(day.pnl)), cell(tradeText(day.trades), "trades"));
+    trades.append(tr);
   });
   const days = current.days.slice().sort((a, b) => (a[dayKey] - b[dayKey]) * dayDir);
   days.forEach((day) => {

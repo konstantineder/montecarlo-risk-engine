@@ -81,6 +81,16 @@ def load_summary(run_id: str) -> dict:
     return json.loads((_folder(run_id) / "summary.json").read_text())
 
 
+def folder_for(run_id: str = "latest") -> Path:
+    return _folder(run_id)
+
+
+def load_saved(folder: Path) -> dict:
+    result = json.loads((folder / "summary.json").read_text())
+    result["saved"] = {"paths": str(folder / "paths.jsonl"), "dir": str(folder), "id": folder.name}
+    return result
+
+
 def load_path(run_id: str, path_index: int) -> dict:
     with (_folder(run_id) / "paths.jsonl").open() as handle:
         for line in handle:

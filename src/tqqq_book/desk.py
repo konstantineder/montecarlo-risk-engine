@@ -707,7 +707,16 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--strategy", default="wheel", choices=("wheel", "hold"))
     parser.add_argument("--report", default="", help="Write an HTML desk report to this path.")
+    parser.add_argument("--rebuild", action="store_true", help="Rewrite the latest desk.html from the saved run. Does not resimulate.")
     args = parser.parse_args()
+    if args.rebuild:
+        from tqqq_book.report import write_report
+        from tqqq_book.store import folder_for, load_saved
+        folder = folder_for("latest")
+        saved = load_saved(folder)
+        print(write_report(saved, folder / "desk.html"))
+        print(write_report(saved, folder.parent / "tqqq-desk.html"))
+        return
     put_dte = args.initial_dte if args.initial_dte is not None else args.put_dte
     result = run(config_from_mapping(vars(args) | {"horizon_days": args.horizon, "put_dte": put_dte, "initial_dte": put_dte, "vol": args.vol, "drift": args.drift}))
     if args.report:
