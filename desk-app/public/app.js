@@ -405,9 +405,11 @@ function exportBar(id) {
   const bar = document.createElement("div");
   bar.className = "exports";
   bar.innerHTML = `
-    <a class="ghost" href="/api/runs/${id}/export.json">Export JSON</a>
-    <a class="ghost" href="/api/runs/${id}/export.csv">Export CSV</a>
-    <span class="note">JSON is the whole simulation in one file. CSV is a zip: summary, paths, days, trades, positions, rules.</span>`;
+    <a class="ghost" href="/api/runs/${id}/export.json">JSON full</a>
+    <a class="ghost" href="/api/runs/${id}/export.mtm.json">JSON trades + MTM</a>
+    <a class="ghost" href="/api/runs/${id}/export.book.json">JSON trades + positions</a>
+    <a class="ghost" href="/api/runs/${id}/export.csv">CSV</a>
+    <span class="note">Full keeps the before and after of every rule. Trades + MTM is the daily mark and the trades. Trades + positions adds the end-of-day book. CSV is the zip.</span>`;
   return bar;
 }
 

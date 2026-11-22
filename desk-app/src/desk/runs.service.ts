@@ -108,24 +108,52 @@ export class RunsService {
     return this.aggregate(file);
   }
 
-  streamJson(id: string, res: any) {
+  streamJson(id: string, res: any, kind: "full" | "mtm" | "book" = "full") {
     const summary = this.get(id);
     const file = join(this.root, id, "paths.jsonl");
+    const name = kind === "full" ? `${id}.json` : `${id}.${kind}.json`;
     res.setHeader("Content-Type", "application/json");
-    res.setHeader("Content-Disposition", `attachment; filename="${id}.json"`);
-    res.write(`{"summary":${JSON.stringify(summary)},"paths":[`);
+    res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+    res.write(`{"kind":"${kind}","summary":${JSON.stringify(summary)},"paths":[`);
     let first = true;
     const stream = createReadStream(file);
     const lines = createInterface({ input: stream });
     lines.on("line", (line) => {
       if (!line.trim()) return;
-      res.write(first ? line : `,${line}`);
+      const text = kind === "full" ? line : JSON.stringify(this.slimPath(JSON.parse(line), kind));
+      res.write(first ? text : `,${text}`);
       first = false;
     });
     lines.on("close", () => {
       res.end("]}");
     });
     lines.on("error", () => res.end());
+  }
+
+  private slimPath(row: any, kind: "mtm" | "book") {
+    return {
+      path: row.path,
+      pnl: row.pnl,
+      ending_spot: row.ending_spot,
+      min_spot: row.min_spot,
+      max_dd: row.max_dd,
+      ending_shares: row.ending_shares,
+      assignments: row.assignments,
+      new_calls: row.new_calls,
+      roll_cash: row.roll_cash,
+      days: (row.days || []).map((day: any) => {
+        const slim: any = {
+          day: day.day,
+          price: day.price,
+          pnl: day.pnl,
+          mtm: day.mtm,
+          shares: day.shares,
+          trades: day.trades || [],
+        };
+        if (kind === "book") slim.position = day.position || [];
+        return slim;
+      }),
+    };
   }
 
   streamCsv(id: string, res: any) {

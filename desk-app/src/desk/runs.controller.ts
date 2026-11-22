@@ -34,7 +34,19 @@ export class RunsController {
   @Get("runs/:id/export.json")
   exportJson(@Param("id") id: string, @Res() res: any) {
     if (!this.runs.get(id)) throw new NotFoundException(`No run ${id}`);
-    this.runs.streamJson(id, res);
+    this.runs.streamJson(id, res, "full");
+  }
+
+  @Get("runs/:id/export.mtm.json")
+  exportMtm(@Param("id") id: string, @Res() res: any) {
+    if (!this.runs.get(id)) throw new NotFoundException(`No run ${id}`);
+    this.runs.streamJson(id, res, "mtm");
+  }
+
+  @Get("runs/:id/export.book.json")
+  exportBook(@Param("id") id: string, @Res() res: any) {
+    if (!this.runs.get(id)) throw new NotFoundException(`No run ${id}`);
+    this.runs.streamJson(id, res, "book");
   }
 
   @Get("runs/:id/export.csv")
