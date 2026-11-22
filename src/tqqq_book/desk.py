@@ -68,7 +68,16 @@ class BookConfig:
     iv_elasticity: float = 0.86
     rate: float = 0.04
     harvest_drop: float = 0.08
+    harvest_keep: float = 0.5
     roll_fraction: float = 0.5
+    crash_line: float = 45.0
+    crash_down: float = 10.0
+    roll_up_gap: float = 20.0
+    write_every: int = 5
+    write_floor: float = 52.0
+    reserve_shares: int = 1000
+    reenter_otm: float = 0.05
+    reenter_tenor: int = 10
     put_monetize_drop: float = 0.10
     new_put_otm: float = 0.02
     write_floor_after_monetize: float = 0.90
@@ -852,6 +861,18 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
             for part in str(pick("rules", default="")).split(",")
             if part.strip()
         ),
+        harvest_drop=float(pick("harvest_drop", "harvestDrop", default=base.harvest_drop)),
+        harvest_keep=float(pick("harvest_keep", "harvestKeep", default=base.harvest_keep)),
+        roll_fraction=float(pick("roll_fraction", "rollFraction", default=base.roll_fraction)),
+        crash_line=float(pick("crash_line", "crashLine", default=base.crash_line)),
+        crash_down=float(pick("crash_down", "crashDown", default=base.crash_down)),
+        roll_up_gap=float(pick("roll_up_gap", "rollUpGap", default=base.roll_up_gap)),
+        write_every=int(pick("write_every", "writeEvery", default=base.write_every)),
+        write_floor=float(pick("write_floor", "writeFloor", default=base.write_floor)),
+        stagger_min_spot_frac=float(pick("stagger_min_spot_frac", "min_spot_frac", "minSpotFrac", default=base.stagger_min_spot_frac)),
+        reserve_shares=int(pick("reserve_shares", "reserve", default=base.reserve_shares)),
+        reenter_otm=float(pick("reenter_otm", "reenterOtm", default=base.reenter_otm)),
+        reenter_tenor=int(pick("reenter_tenor", "reenterTenor", default=base.reenter_tenor)),
         tenors=tenors,
         put_sleeves=put_sleeves,
     )
@@ -872,7 +893,20 @@ def main() -> None:
     parser.add_argument("--drift", type=float, default=0.12)
     parser.add_argument("--paths", type=int, default=400)
     parser.add_argument("--seed", type=int, default=13)
+    parser.add_argument("--strategy", default="wheel", choices=("wheel", "hold"))
     parser.add_argument("--rules", default="", help="Comma separated rule names to leave on. Empty means all on.")
+    parser.add_argument("--harvest-drop", type=float, default=0.08)
+    parser.add_argument("--harvest-keep", type=float, default=0.5)
+    parser.add_argument("--roll-fraction", type=float, default=0.5)
+    parser.add_argument("--crash-line", type=float, default=45.0)
+    parser.add_argument("--crash-down", type=float, default=10.0)
+    parser.add_argument("--roll-up-gap", type=float, default=20.0)
+    parser.add_argument("--write-every", type=int, default=5)
+    parser.add_argument("--write-floor", type=float, default=52.0)
+    parser.add_argument("--min-spot-frac", type=float, default=0.95)
+    parser.add_argument("--reserve", type=int, default=1000)
+    parser.add_argument("--reenter-otm", type=float, default=0.05)
+    parser.add_argument("--reenter-tenor", type=int, default=10)
     parser.add_argument("--report", default="", help="Write an HTML desk report to this path.")
     parser.add_argument("--rebuild", action="store_true", help="Rewrite the latest desk.html from the saved run. Does not resimulate.")
     args = parser.parse_args()

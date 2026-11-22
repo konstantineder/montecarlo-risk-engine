@@ -282,37 +282,87 @@ function route() {
   return showHome();
 }
 
+const RULE_FIELDS = {
+  harvest: [["drop", "harvestDrop", "Drop"], ["keep", "harvestKeep", "Buy back at"]],
+  crash_roll: [["fraction", "rollFraction", "Fraction"], ["line", "crashLine", "Crash line"], ["down", "crashDown", "Roll down by"]],
+  roll_up: [["gap", "rollUpGap", "Gap"]],
+  write_calls: [["every", "writeEvery", "Every"], ["floor", "writeFloor", "Floor"], ["min_spot_frac", "minSpotFrac", "Min spot"], ["reserve_shares", "reserve", "Reserve"]],
+  replace_assigned: [["otm", "reenterOtm", "OTM"], ["tenor", "reenterTenor", "Tenor"]],
+};
+
 function chosenRules() {
   const saved = localStorage.getItem("desk-rules");
-  return saved ? JSON.parse(saved) : null;
+  if (!saved) return null;
+  const parsed = JSON.parse(saved);
+  return Array.isArray(parsed) ? null : parsed;
 }
 
-function saveRules(names) {
-  localStorage.setItem("desk-rules", JSON.stringify(names));
+function saveRules(state) {
+  localStorage.setItem("desk-rules", JSON.stringify(state));
+}
+
+function savedConfig() {
+  const saved = localStorage.getItem("desk-config");
+  return saved ? JSON.parse(saved) : {};
+}
+
+function saveConfig(values) {
+  localStorage.setItem("desk-config", JSON.stringify(values));
+}
+
+function rulePayload() {
+  const state = chosenRules() || {};
+  const body = {};
+  const on = [];
+  Object.entries(state).forEach(([name, row]) => {
+    if (row.on !== false) on.push(name);
+    Object.entries(row.values || {}).forEach(([key, value]) => { body[key] = value; });
+  });
+  if (chosenRules()) body.rules = on.join(",");
+  return body;
 }
 
 async function showRules() {
   crumb.textContent = "Rules";
-  app.innerHTML = "<h1>Rules</h1><p class='lede'>A rule is on or off. Off means it is not called, so it cannot act. This set is used for the next simulation, and for re-reading a saved one.</p>";
+  app.innerHTML = "<h1>Rules</h1><p class='lede'>A rule is on or off, and its numbers are editable. Off means it is not called. These values are used for the next simulation and for a re-read.</p>";
   const rules = await get("/api/rules");
-  const picked = new Set(chosenRules() || rules.map((rule) => rule.name));
+  const saved = chosenRules() || {};
+  const state = {};
+  rules.forEach((rule) => {
+    const prior = saved[rule.name] || {};
+    const values = {};
+    (RULE_FIELDS[rule.name] || []).forEach(([key, bodyKey]) => {
+      values[bodyKey] = prior.values?.[bodyKey] ?? rule[key];
+    });
+    state[rule.name] = { on: prior.on !== false, values };
+  });
   const list = document.createElement("div");
   const draw = () => {
     list.replaceChildren();
     rules.forEach((rule) => {
-      const on = picked.has(rule.name);
+      const row = state[rule.name];
       const card = document.createElement("article");
-      card.className = `rule ${on ? "on" : "off"}`;
-      const knobs = Object.entries(rule).filter(([key]) => !["name", "says", "on", "paths"].includes(key))
-        .map(([key, value]) => `${key} ${value}`).join(" · ");
+      card.className = `rule ${row.on ? "on" : "off"}`;
+      const fields = (RULE_FIELDS[rule.name] || []).map(([key, bodyKey, label]) =>
+        `<label>${label}<input data-key="${bodyKey}" value="${row.values[bodyKey] ?? ""}"/></label>`
+      ).join("");
       card.innerHTML = `
-        <button class="switch">${on ? "ON" : "OFF"}</button>
-        <div><h3>${rule.name}</h3><p>${rule.says}</p>${knobs ? `<div class="knobs">${knobs}</div>` : ""}</div>`;
+        <button class="switch">${row.on ? "ON" : "OFF"}</button>
+        <div>
+          <h3>${rule.name}</h3>
+          <p>${rule.says}</p>
+          <div class="knobs">${fields}</div>
+        </div>`;
       card.querySelector("button").addEventListener("click", () => {
-        if (picked.has(rule.name)) picked.delete(rule.name);
-        else picked.add(rule.name);
-        saveRules([...picked]);
+        row.on = !row.on;
+        saveRules(state);
         draw();
+      });
+      card.querySelectorAll("input").forEach((input) => {
+        input.addEventListener("change", () => {
+          row.values[input.dataset.key] = input.value;
+          saveRules(state);
+        });
       });
       list.append(card);
     });
@@ -323,24 +373,32 @@ async function showRules() {
 
 async function showConfig() {
   crumb.textContent = "Configuration";
-  app.innerHTML = "<h1>Configuration</h1><p class='lede'>These are the defaults a new simulation starts from. A saved run keeps the values it was made with.</p>";
-  const fields = [
-    ["Lots", "100"],
-    ["Horizon", "100 days"],
-    ["Paths", "100"],
-    ["Seed", "13"],
-    ["Spot", "59.22"],
-    ["IV", "0.71"],
-    ["Put sleeves", "10% at 60d, 40% at 90d, 50% at 180d"],
-    ["Call OTM", "3%, 5%, 8%, 10%"],
-    ["Contracts", "12, 12, 12, 10"],
-    ["Strategy", "wheel"],
-  ];
-  app.append(facts(fields));
-  const note = document.createElement("p");
-  note.className = "note";
-  note.textContent = "Change them on the Simulations page when you start a run. The rules switches are on the Rules page.";
-  app.append(note);
+  app.innerHTML = "<h1>Configuration</h1><p class='lede'>These values fill the simulation form. Change them here and they are used next time you run.</p>";
+  const cfg = savedConfig();
+  const form = document.createElement("form");
+  form.className = "form";
+  const field = (name, label, value, wide = false) =>
+    `<label class="${wide ? "wide" : ""}">${label}<input name="${name}" value="${cfg[name] ?? value}"/></label>`;
+  form.innerHTML = `
+    ${field("lots", "Lots", "100")}
+    ${field("horizon", "Horizon days", "100")}
+    ${field("paths", "Paths", "100")}
+    ${field("seed", "Seed", "13")}
+    ${field("spot", "Spot", "59.22")}
+    ${field("iv", "IV", "0.71")}
+    ${field("contracts", "Contracts 1w,2w,3w,4w", "12,12,12,10")}
+    <label>Strategy<select name="strategy"><option ${cfg.strategy !== "hold" ? "selected" : ""}>wheel</option><option ${cfg.strategy === "hold" ? "selected" : ""}>hold</option></select></label>
+    ${field("puts", "Put sleeves percent:dte:roll", "10:60:30,40:90:45,50:180:90", true)}
+    ${field("otm", "Call OTM 1w,2w,3w,4w", "0.03,0.05,0.08,0.10", true)}
+    <button class="run" type="submit">Save configuration</button>`;
+  const status = document.createElement("p");
+  status.className = "status";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveConfig(Object.fromEntries(new FormData(form).entries()));
+    status.textContent = "Saved. The next simulation uses these.";
+  });
+  app.append(form, status);
 }
 
 function ruleSnapshot(rules) {
@@ -360,25 +418,26 @@ async function showHome() {
   app.innerHTML = "<h1>Simulations</h1><p class='lede'>Start a run, or open one that is already saved.</p>";
   const form = document.createElement("form");
   form.className = "form";
+  const cfg = savedConfig();
   form.innerHTML = `
-    <label>Lots<input name="lots" value="100"/></label>
-    <label>Horizon days<input name="horizon" value="100"/></label>
-    <label>Paths<input name="paths" value="100"/></label>
-    <label>Seed<input name="seed" value="13"/></label>
-    <label>Spot<input name="spot" value="59.22"/></label>
-    <label>IV<input name="iv" value="0.71"/></label>
-    <label>Strategy<select name="strategy"><option>wheel</option><option>hold</option></select></label>
-    <label>Contracts<input name="contracts" value="12,12,12,10"/></label>
-    <label class="wide">Put sleeves percent:dte:roll<input name="puts" value="10:60:30,40:90:45,50:180:90"/></label>
-    <label class="wide">Call OTM 1w,2w,3w,4w<input name="otm" value="0.03,0.05,0.08,0.10"/></label>
+    <label>Lots<input name="lots" value="${cfg.lots || 100}"/></label>
+    <label>Horizon days<input name="horizon" value="${cfg.horizon || 100}"/></label>
+    <label>Paths<input name="paths" value="${cfg.paths || 100}"/></label>
+    <label>Seed<input name="seed" value="${cfg.seed || 13}"/></label>
+    <label>Spot<input name="spot" value="${cfg.spot || 59.22}"/></label>
+    <label>IV<input name="iv" value="${cfg.iv || 0.71}"/></label>
+    <label>Strategy<select name="strategy"><option ${cfg.strategy !== "hold" ? "selected" : ""}>wheel</option><option ${cfg.strategy === "hold" ? "selected" : ""}>hold</option></select></label>
+    <label>Contracts<input name="contracts" value="${cfg.contracts || "12,12,12,10"}"/></label>
+    <label class="wide">Put sleeves percent:dte:roll<input name="puts" value="${cfg.puts || "10:60:30,40:90:45,50:180:90"}"/></label>
+    <label class="wide">Call OTM 1w,2w,3w,4w<input name="otm" value="${cfg.otm || "0.03,0.05,0.08,0.10"}"/></label>
     <button class="run" type="submit">Run simulation</button>`;
   const status = document.createElement("p");
   status.className = "status";
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const body = Object.fromEntries(new FormData(form).entries());
-    const picked = chosenRules();
-    if (picked) body.rules = picked.join(",");
+    Object.assign(body, rulePayload());
+    saveConfig(body);
     form.querySelector("button").disabled = true;
     status.textContent = "Starting…";
     const started = await fetch("/api/simulate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -465,11 +524,11 @@ async function showRun(id) {
   reread.addEventListener("click", async () => {
     reread.disabled = true;
     status.textContent = "Re-reading the same seed under the rules you have switched on…";
-    const picked = chosenRules();
+    const picked = rulePayload();
     const started = await fetch(`/api/runs/${id}/reread`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rules: picked ? picked.join(",") : "" }),
+      body: JSON.stringify(picked),
     }).then((r) => r.json());
     const tick = async () => {
       const job = await get(`/api/jobs/${started.job}`);

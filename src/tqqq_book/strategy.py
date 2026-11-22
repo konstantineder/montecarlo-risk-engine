@@ -313,12 +313,26 @@ class ReplaceAssigned:
 def all_rules(cfg) -> list:
     tenors = tuple((tenor.days, tenor.otm, tenor.contracts, tenor.tag) for tenor in cfg.tenors)
     return [
-        Harvest(drop=cfg.harvest_drop),
-        CrashRoll(fraction=cfg.roll_fraction, spot=cfg.spot),
+        Harvest(drop=cfg.harvest_drop, keep=getattr(cfg, "harvest_keep", 0.5)),
+        CrashRoll(
+            fraction=cfg.roll_fraction,
+            spot=cfg.spot,
+            line_at_ref=getattr(cfg, "crash_line", 45.0),
+            down=getattr(cfg, "crash_down", 10.0),
+        ),
         KeepTenor(sleeves=tuple(cfg.put_sleeves)),
-        RollUp(),
-        WriteCalls(tenors=tenors, lots=cfg.lots, spot=cfg.spot, min_spot_frac=cfg.stagger_min_spot_frac),
-        ReplaceAssigned(),
+        RollUp(gap=getattr(cfg, "roll_up_gap", 20.0)),
+        WriteCalls(
+            tenors=tenors, lots=cfg.lots, spot=cfg.spot,
+            every=getattr(cfg, "write_every", 5),
+            floor_at_ref=getattr(cfg, "write_floor", 52.0),
+            min_spot_frac=cfg.stagger_min_spot_frac,
+            reserve_at_ref=getattr(cfg, "reserve_shares", 1000),
+        ),
+        ReplaceAssigned(
+            otm=getattr(cfg, "reenter_otm", 0.05),
+            tenor=getattr(cfg, "reenter_tenor", 10),
+        ),
     ]
 
 

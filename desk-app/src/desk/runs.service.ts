@@ -134,6 +134,23 @@ export class RunsService {
     ];
     const rules = text("rules", "");
     if (rules) args.push("--rules", rules);
+    const knobs: Array<[string, string, string]> = [
+      ["harvestDrop", "--harvest-drop", "0.08"],
+      ["harvestKeep", "--harvest-keep", "0.5"],
+      ["rollFraction", "--roll-fraction", "0.5"],
+      ["crashLine", "--crash-line", "45"],
+      ["crashDown", "--crash-down", "10"],
+      ["rollUpGap", "--roll-up-gap", "20"],
+      ["writeEvery", "--write-every", "5"],
+      ["writeFloor", "--write-floor", "52"],
+      ["minSpotFrac", "--min-spot-frac", "0.95"],
+      ["reserve", "--reserve", "1000"],
+      ["reenterOtm", "--reenter-otm", "0.05"],
+      ["reenterTenor", "--reenter-tenor", "10"],
+    ];
+    knobs.forEach(([key, flag, fallback]) => {
+      if (body[key] != null && String(body[key]).trim() !== "") args.push(flag, text(key, fallback));
+    });
     const venv = join(this.repo, ".venv", "bin", "python");
     const python = existsSync(venv) ? venv : "python3";
     this.jobs.set(id, { status: "running", log: "" });
@@ -198,6 +215,18 @@ export class RunsService {
       otm: tenors.map((row: { otm: number }) => row.otm).join(",") || "0.03,0.05,0.08,0.10",
       contracts: tenors.map((row: { contracts: number }) => row.contracts).join(",") || "12,12,12,10",
       rules: body.rules || "",
+      harvestDrop: body.harvestDrop || "",
+      harvestKeep: body.harvestKeep || "",
+      rollFraction: body.rollFraction || "",
+      crashLine: body.crashLine || "",
+      crashDown: body.crashDown || "",
+      rollUpGap: body.rollUpGap || "",
+      writeEvery: body.writeEvery || "",
+      writeFloor: body.writeFloor || "",
+      minSpotFrac: body.minSpotFrac || "",
+      reserve: body.reserve || "",
+      reenterOtm: body.reenterOtm || "",
+      reenterTenor: body.reenterTenor || "",
     });
   }
 
