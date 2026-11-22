@@ -116,6 +116,7 @@ td.trades { color: var(--accent); white-space: normal; }
 .rule .knobs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .rule .knobs label { display: flex; flex-direction: column; gap: 3px; color: var(--dim); font: 11px/1.2 ui-monospace, monospace; text-transform: uppercase; letter-spacing: 0.04em; }
 .rule .knobs input { width: 90px; background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 13px/1 ui-monospace, monospace; }
+.rule .knobs input[data-key="putRatioGrid"] { width: 240px; }
 .ticks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
 .tick { font: 12px/1 ui-monospace, monospace; padding: 5px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; }
 .tick.acted { color: #fff; background: var(--accent); border-color: var(--accent); }

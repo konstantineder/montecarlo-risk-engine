@@ -286,6 +286,8 @@ const RULE_FIELDS = {
   harvest: [["drop", "harvestDrop", "Drop"], ["keep", "harvestKeep", "Buy back at"]],
   crash_roll: [["fraction", "rollFraction", "Fraction"], ["line", "crashLine", "Crash line"], ["down", "crashDown", "Roll down by"]],
   roll_up: [["gap", "rollUpGap", "Gap"]],
+  roll_down: [["gap", "rollDownGap", "Gap"], ["floor", "rollDownFloor", "Min strike"]],
+  put_ratio: [["grid", "putRatioGrid", "Grid"]],
   write_calls: [["every", "writeEvery", "Every"], ["floor", "writeFloor", "Floor"], ["min_spot_frac", "minSpotFrac", "Min spot"], ["reserve_shares", "reserve", "Reserve"]],
   replace_assigned: [["otm", "reenterOtm", "OTM"], ["tenor", "reenterTenor", "Tenor"]],
 };

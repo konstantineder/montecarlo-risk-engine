@@ -73,6 +73,9 @@ class BookConfig:
     crash_line: float = 45.0
     crash_down: float = 10.0
     roll_up_gap: float = 20.0
+    roll_down_gap: float = 12.0
+    roll_down_floor: float = 40.0
+    put_ratio_grid: tuple = ((0.0, 1.0), (0.15, 1.1), (0.30, 1.2), (0.50, 1.5))
     write_every: int = 5
     write_floor: float = 52.0
     reserve_shares: int = 1000
@@ -456,6 +459,45 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                 "tag": order.tag,
                 "reason": order.reason,
             })
+            return
+        if order.action == "add_put":
+            if order.qty <= 0 or order.expiry <= t:
+                return
+            premium = _fast_price(spot, order.strike, (order.expiry - t) * DT, cfg.rate, sigma, "put") + cfg.slippage
+            cash -= order.qty * CONTRACT * premium
+            legs.append(Leg(
+                "put", "long", order.strike, order.qty, order.expiry, premium, order.tag,
+                tenor=order.tenor, roll_at=order.roll_at,
+            ))
+            day_trades.append({
+                "rule": order.rule,
+                "action": "add_put",
+                "qty": order.qty,
+                "strike": order.strike,
+                "expiry": order.expiry,
+                "premium": round(premium, 4),
+                "tag": order.tag,
+                "reason": order.reason,
+            })
+            return
+        if order.action == "trim_put":
+            leg = order.leg
+            if leg is None or not leg.open or order.qty <= 0:
+                return
+            mark = _mark(leg, spot, t, cfg.rate, sigma)
+            cash += order.qty * CONTRACT * max(0.0, mark - cfg.slippage)
+            leg.qty -= order.qty
+            if leg.qty <= 0:
+                leg.open = False
+            day_trades.append({
+                "rule": order.rule,
+                "action": "trim_put",
+                "qty": order.qty,
+                "strike": leg.strike,
+                "premium": round(mark, 4),
+                "tag": leg.tag,
+                "reason": order.reason,
+            })
 
     from tqqq_book.strategy import Position, rules_for
     rules = rules_for(cfg) if strategy == "wheel" else []
@@ -799,7 +841,20 @@ def run(cfg: BookConfig | None = None) -> dict:
     return result
 
 
-def parse_put_sleeves(text: str) -> tuple[PutSleeve, ...]:
+def parse_ratio_grid(text: str) -> tuple:
+    """'0:1,15:1.1,30:1.2,50:1.5' is drop percent, puts per 100 shares."""
+    if not str(text).strip():
+        return ((0.0, 1.0), (0.15, 1.1), (0.30, 1.2), (0.50, 1.5))
+    rows = []
+    for part in str(text).split(","):
+        bits = [piece.strip() for piece in part.split(":") if piece.strip()]
+        if len(bits) != 2:
+            raise ValueError("Each ratio step is percent:ratio, for example 15:1.1")
+        level, ratio = float(bits[0]), float(bits[1])
+        if level < 0 or ratio <= 0:
+            raise ValueError(f"Bad ratio step {part}")
+        rows.append((level / 100.0, ratio))
+    return tuple(sorted(rows))
     """'10:60:30,40:90:45,50:180:90' is percent, DTE, roll-at DTE."""
     sleeves = []
     for part in str(text).split(","):
@@ -867,6 +922,9 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
         crash_line=float(pick("crash_line", "crashLine", default=base.crash_line)),
         crash_down=float(pick("crash_down", "crashDown", default=base.crash_down)),
         roll_up_gap=float(pick("roll_up_gap", "rollUpGap", default=base.roll_up_gap)),
+        roll_down_gap=float(pick("roll_down_gap", "rollDownGap", default=base.roll_down_gap)),
+        roll_down_floor=float(pick("roll_down_floor", "rollDownFloor", default=base.roll_down_floor)),
+        put_ratio_grid=parse_ratio_grid(pick("put_ratio_grid", "putRatioGrid", "put_ratio", default="")),
         write_every=int(pick("write_every", "writeEvery", default=base.write_every)),
         write_floor=float(pick("write_floor", "writeFloor", default=base.write_floor)),
         stagger_min_spot_frac=float(pick("stagger_min_spot_frac", "min_spot_frac", "minSpotFrac", default=base.stagger_min_spot_frac)),
@@ -901,6 +959,9 @@ def main() -> None:
     parser.add_argument("--crash-line", type=float, default=45.0)
     parser.add_argument("--crash-down", type=float, default=10.0)
     parser.add_argument("--roll-up-gap", type=float, default=20.0)
+    parser.add_argument("--roll-down-gap", type=float, default=12.0)
+    parser.add_argument("--roll-down-floor", type=float, default=40.0)
+    parser.add_argument("--put-ratio", default="0:1,15:1.1,30:1.2,50:1.5", help="Drop percent:puts per 100 shares.")
     parser.add_argument("--write-every", type=int, default=5)
     parser.add_argument("--write-floor", type=float, default=52.0)
     parser.add_argument("--min-spot-frac", type=float, default=0.95)

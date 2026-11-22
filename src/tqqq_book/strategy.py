@@ -179,6 +179,40 @@ class RollUp:
 
 
 @dataclass(frozen=True)
+class RollDown:
+    """Trail the long puts down. Every $12 the stock falls, lower the put, but not under the floor."""
+
+    gap: float = 12.0
+    floor: float = 40.0
+    name: str = "roll_down"
+
+    def apply(self, position: Position) -> list[Order]:
+        orders = []
+        for leg in list(position.legs):
+            if not (leg.open and leg.side == "long" and leg.kind == "put" and leg.qty > 0):
+                continue
+            if position.spot > leg.strike - self.gap:
+                continue
+            target = float(int(position.spot // self.gap) * self.gap)
+            if target < self.floor or target >= leg.strike:
+                continue
+            orders.append(Order(
+                self.name, "roll_put", leg.qty, target, leg.expiry, leg.tag,
+                tenor=leg.tenor, roll_at=leg.roll_at, leg=leg,
+                reason=f"from {leg.strike:.0f}, spot {position.spot:.0f}, floor {self.floor:.0f}",
+            ))
+        return orders
+
+    def describe(self) -> dict:
+        return {
+            "name": self.name,
+            "says": "When the stock is this far under a long put, roll that put down to the rung under the stock. Never below the min strike.",
+            "gap": self.gap,
+            "floor": self.floor,
+        }
+
+
+@dataclass(frozen=True)
 class KeepTenor:
     """When a put has this many days left, sell it and buy the same strike back out at its own DTE."""
 
@@ -214,6 +248,76 @@ class KeepTenor:
         }
 
 
+def _ratio_for(grid: tuple, drop: float) -> float:
+    ratio = grid[0][1] if grid else 1.0
+    for level, value in grid:
+        if drop + 1e-9 >= level:
+            ratio = value
+    return ratio
+
+
+@dataclass(frozen=True)
+class PutRatio:
+    """Hold more puts than shares once the stock is down from the opening price."""
+
+    grid: tuple = ((0.0, 1.0), (0.15, 1.1), (0.30, 1.2), (0.50, 1.5))
+    name: str = "put_ratio"
+
+    def apply(self, position: Position) -> list[Order]:
+        if position.shares <= 0 or position.spot0 <= 0 or not self.grid:
+            return []
+        drop = max(0.0, (position.spot0 - position.spot) / position.spot0)
+        want = int(round(position.shares / CONTRACT * _ratio_for(self.grid, drop)))
+        puts = _open_long_puts(position.legs)
+        have = sum(leg.qty for leg in puts)
+        if want == have or not puts:
+            return []
+        if want > have:
+            return self._add(puts, want - have, drop)
+        return self._trim(puts, have - want, drop)
+
+    def _add(self, puts: list, need: int, drop: float) -> list[Order]:
+        weights = [max(1, leg.qty) for leg in puts]
+        total = sum(weights)
+        raw = [need * weight / total for weight in weights]
+        floors = [int(value) for value in raw]
+        left = need - sum(floors)
+        order = sorted(range(len(raw)), key=lambda i: raw[i] - floors[i], reverse=True)
+        for index in order[:left]:
+            floors[index] += 1
+        orders = []
+        for leg, qty in zip(puts, floors):
+            if qty <= 0:
+                continue
+            orders.append(Order(
+                self.name, "add_put", qty, leg.strike, leg.expiry, leg.tag,
+                tenor=leg.tenor, roll_at=leg.roll_at,
+                reason=f"drop {drop:.0%}, add to {leg.strike:.0f}",
+            ))
+        return orders
+
+    def _trim(self, puts: list, extra: int, drop: float) -> list[Order]:
+        orders = []
+        for leg in sorted(puts, key=lambda item: item.strike, reverse=True):
+            if extra <= 0:
+                break
+            qty = min(extra, leg.qty)
+            orders.append(Order(
+                self.name, "trim_put", qty, leg.strike, leg.expiry, leg.tag, leg=leg,
+                reason=f"drop {drop:.0%}, trim {leg.strike:.0f}",
+            ))
+            extra -= qty
+        return orders
+
+    def describe(self) -> dict:
+        grid = ",".join(f"{int(level * 100)}:{ratio:g}" for level, ratio in self.grid)
+        return {
+            "name": self.name,
+            "says": "From the opening price, hold this many puts per 100 shares. The ratio steps up as the stock falls, and back as it recovers.",
+            "grid": grid,
+        }
+
+
 @dataclass(frozen=True)
 class WriteCalls:
     """Sell the call ladder above the puts that still cover the shares. Leave a reserve uncovered."""
@@ -237,8 +341,6 @@ class WriteCalls:
 
     def apply(self, position: Position) -> list[Order]:
         if position.day <= 0 or position.day % self.every != 0:
-            return []
-        if position.spot < min(self.floor, position.spot * self.min_spot_frac):
             return []
         room = max(0, int((position.shares - _covered_calls(position.legs) - self.reserve) // CONTRACT))
         if room <= 0:
@@ -265,7 +367,7 @@ class WriteCalls:
     def describe(self) -> dict:
         return {
             "name": self.name,
-            "says": "Every few days, sell the call ladder. Never below the puts still on the shares, and never on the reserve.",
+            "says": "Every few days, sell the call ladder off the current spot. Never below the puts still on the shares, and never on the reserve.",
             "every": self.every,
             "floor": round(self.floor, 2),
             "min_spot_frac": self.min_spot_frac,
@@ -322,6 +424,8 @@ def all_rules(cfg) -> list:
         ),
         KeepTenor(sleeves=tuple(cfg.put_sleeves)),
         RollUp(gap=getattr(cfg, "roll_up_gap", 20.0)),
+        RollDown(gap=getattr(cfg, "roll_down_gap", 12.0), floor=getattr(cfg, "roll_down_floor", 40.0)),
+        PutRatio(grid=getattr(cfg, "put_ratio_grid", ((0.0, 1.0), (0.15, 1.1), (0.30, 1.2), (0.50, 1.5)))),
         WriteCalls(
             tenors=tenors, lots=cfg.lots, spot=cfg.spot,
             every=getattr(cfg, "write_every", 5),
