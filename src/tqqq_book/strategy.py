@@ -310,10 +310,7 @@ class ReplaceAssigned:
         }
 
 
-def rules_for(cfg) -> list:
-    """The wheel is these four rules. Hold is no rules."""
-    if getattr(cfg, "strategy", "wheel") != "wheel":
-        return []
+def all_rules(cfg) -> list:
     tenors = tuple((tenor.days, tenor.otm, tenor.contracts, tenor.tag) for tenor in cfg.tenors)
     return [
         Harvest(drop=cfg.harvest_drop),
@@ -323,6 +320,28 @@ def rules_for(cfg) -> list:
         WriteCalls(tenors=tenors, lots=cfg.lots, spot=cfg.spot, min_spot_frac=cfg.stagger_min_spot_frac),
         ReplaceAssigned(),
     ]
+
+
+def rules_for(cfg) -> list:
+    """The wheel is these rules. A rule that is switched off is not here, so it cannot act."""
+    if getattr(cfg, "strategy", "wheel") != "wheel":
+        return []
+    chosen = set(getattr(cfg, "rules", ()) or ())
+    rules = all_rules(cfg)
+    if not chosen:
+        return rules
+    return [rule for rule in rules if rule.name in chosen]
+
+
+def catalogue(cfg) -> list[dict]:
+    """Every rule, marked on or off. An empty choice means all on."""
+    chosen = set(getattr(cfg, "rules", ()) or ())
+    rows = []
+    for rule in all_rules(cfg):
+        row = rule.describe()
+        row["on"] = (not chosen) or rule.name in chosen
+        rows.append(row)
+    return rows
 
 
 def describe(rules: list) -> list[dict]:

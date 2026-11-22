@@ -264,9 +264,87 @@ function route() {
   const hash = location.hash.replace(/^#/, "") || "/";
   const parts = hash.split("/").filter(Boolean);
   crumb.textContent = "";
+  document.querySelectorAll(".nav a").forEach((link) => {
+    link.classList.toggle("on", link.getAttribute("href") === `#/${parts[0] || ""}`.replace("#//", "#/"));
+  });
+  if (parts[0] === "rules") return showRules();
+  if (parts[0] === "config") return showConfig();
   if (parts[0] === "run" && parts[2] === "path") return showPath(parts[1], Number(parts[3]));
   if (parts[0] === "run") return showRun(parts[1]);
   return showHome();
+}
+
+function chosenRules() {
+  const saved = localStorage.getItem("desk-rules");
+  return saved ? JSON.parse(saved) : null;
+}
+
+function saveRules(names) {
+  localStorage.setItem("desk-rules", JSON.stringify(names));
+}
+
+async function showRules() {
+  crumb.textContent = "Rules";
+  app.innerHTML = "<h1>Rules</h1><p class='lede'>A rule is on or off. Off means it is not called, so it cannot act. This set is used for the next simulation, and for re-reading a saved one.</p>";
+  const rules = await get("/api/rules");
+  const picked = new Set(chosenRules() || rules.map((rule) => rule.name));
+  const list = document.createElement("div");
+  const draw = () => {
+    list.replaceChildren();
+    rules.forEach((rule) => {
+      const on = picked.has(rule.name);
+      const card = document.createElement("article");
+      card.className = `rule ${on ? "on" : "off"}`;
+      const knobs = Object.entries(rule).filter(([key]) => !["name", "says", "on", "paths"].includes(key))
+        .map(([key, value]) => `${key} ${value}`).join(" · ");
+      card.innerHTML = `
+        <button class="switch">${on ? "ON" : "OFF"}</button>
+        <div><h3>${rule.name}</h3><p>${rule.says}</p>${knobs ? `<div class="knobs">${knobs}</div>` : ""}</div>`;
+      card.querySelector("button").addEventListener("click", () => {
+        if (picked.has(rule.name)) picked.delete(rule.name);
+        else picked.add(rule.name);
+        saveRules([...picked]);
+        draw();
+      });
+      list.append(card);
+    });
+  };
+  draw();
+  app.append(list);
+}
+
+async function showConfig() {
+  crumb.textContent = "Configuration";
+  app.innerHTML = "<h1>Configuration</h1><p class='lede'>These are the defaults a new simulation starts from. A saved run keeps the values it was made with.</p>";
+  const fields = [
+    ["Lots", "100"],
+    ["Horizon", "100 days"],
+    ["Paths", "100"],
+    ["Seed", "13"],
+    ["Spot", "59.22"],
+    ["IV", "0.71"],
+    ["Put sleeves", "10% at 60d, 40% at 90d, 50% at 180d"],
+    ["Call OTM", "3%, 5%, 8%, 10%"],
+    ["Contracts", "12, 12, 12, 10"],
+    ["Strategy", "wheel"],
+  ];
+  app.append(facts(fields));
+  const note = document.createElement("p");
+  note.className = "note";
+  note.textContent = "Change them on the Simulations page when you start a run. The rules switches are on the Rules page.";
+  app.append(note);
+}
+
+function ruleSnapshot(rules) {
+  const wrap = document.createElement("div");
+  (rules || []).forEach((rule) => {
+    const card = document.createElement("article");
+    card.className = `rule ${rule.on === false ? "off" : "on"}`;
+    const acted = rule.paths != null ? ` · acted on ${rule.paths} paths` : "";
+    card.innerHTML = `<div class="switch">${rule.on === false ? "OFF" : "ON"}</div><div><h3>${rule.name}${acted}</h3><p>${rule.says || ""}</p></div>`;
+    wrap.append(card);
+  });
+  return wrap;
 }
 
 async function showHome() {
@@ -291,6 +369,8 @@ async function showHome() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const body = Object.fromEntries(new FormData(form).entries());
+    const picked = chosenRules();
+    if (picked) body.rules = picked.join(",");
     form.querySelector("button").disabled = true;
     status.textContent = "Starting…";
     const started = await fetch("/api/simulate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -363,6 +443,35 @@ async function showRun(id) {
     ["Deployed", money(book.deployed)],
     ["Floor", money(book.floor)],
   ]));
+
+  const rulesTitle = document.createElement("h2");
+  rulesTitle.textContent = "Rules on this run";
+  const rulesNote = document.createElement("p");
+  rulesNote.className = "note";
+  rulesNote.textContent = "This is the snapshot taken when the run was made. ON was called. OFF was not. The count is how many paths a rule actually traded on.";
+  const reread = document.createElement("button");
+  reread.className = "ghost";
+  reread.textContent = "Re-read this simulation with my rules";
+  const status = document.createElement("p");
+  status.className = "status";
+  reread.addEventListener("click", async () => {
+    reread.disabled = true;
+    status.textContent = "Re-reading the same seed under the rules you have switched on…";
+    const picked = chosenRules();
+    const started = await fetch(`/api/runs/${id}/reread`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rules: picked ? picked.join(",") : "" }),
+    }).then((r) => r.json());
+    const tick = async () => {
+      const job = await get(`/api/jobs/${started.job}`);
+      if (job.status === "done") { location.hash = `#/run/${job.run}`; return; }
+      if (job.status === "error") { status.textContent = job.error || "The re-read failed."; reread.disabled = false; return; }
+      setTimeout(tick, 2000);
+    };
+    tick();
+  });
+  app.append(rulesTitle, rulesNote, ruleSnapshot(run.rules), reread, status);
 
   const grid = document.createElement("div");
   grid.className = "chart-grid";
@@ -517,10 +626,18 @@ async function showPath(id, index) {
     bookHost.replaceChildren();
     const title = document.createElement("h2");
     title.textContent = `Day ${selected.day} close`;
+    const ticks = document.createElement("div");
+    ticks.className = "ticks";
+    (selected.rules || []).forEach((rule) => {
+      const span = document.createElement("span");
+      span.className = `tick ${rule.acted ? "acted" : "idle"}`;
+      span.textContent = `${rule.name} ${rule.acted ? "acted" : "idle"}`;
+      ticks.append(span);
+    });
     const note = document.createElement("p");
     note.className = "note";
-    note.textContent = "MTM is the value of that line. The book row is the sum, which is the P&L.";
-    bookHost.append(title, note, positionTable(selected.position));
+    note.textContent = "Gold means the rule traded that day. Idle means it was on, looked, and did nothing.";
+    bookHost.append(title, ticks, note, positionTable(selected.position));
     (selected.steps || []).forEach((step) => {
       const details = document.createElement("details");
       details.open = true;

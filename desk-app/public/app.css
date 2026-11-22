@@ -14,10 +14,36 @@
 }
 * { box-sizing: border-box; }
 body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
+  display: flex; min-height: 100vh; margin: 0;
+  background: var(--bg); color: var(--ink);
   font: 15px/1.45 Georgia, "Iowan Old Style", serif;
+}
+.nav {
+  width: 210px; flex: none; padding: 22px 16px;
+  border-right: 1px solid var(--line); background: #100e0b;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.nav .brand { font-size: 18px; margin-bottom: 16px; }
+.nav a { color: var(--muted); padding: 8px 10px; border-radius: 8px; }
+.nav a.on, .nav a:hover { color: var(--ink); background: var(--on); }
+.shell { flex: 1; min-width: 0; }
+.rule {
+  display: grid; grid-template-columns: 72px 1fr; gap: 12px; align-items: start;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 8px 0;
+}
+.rule .switch { font: 12px/1 ui-monospace, monospace; }
+.rule.on .switch { color: var(--green); }
+.rule.off .switch { color: var(--brick); }
+.rule h3 { margin: 0 0 4px; font-size: 16px; }
+.rule p { margin: 0; color: var(--muted); font-size: 14px; }
+.rule .knobs { color: var(--dim); font: 12px/1.4 ui-monospace, monospace; margin-top: 6px; }
+.ticks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+.tick { font: 12px/1 ui-monospace, monospace; padding: 5px 8px; border-radius: 999px; border: 1px solid var(--line); }
+.tick.acted { color: #14120e; background: var(--gold); border-color: var(--gold); }
+.tick.idle { color: var(--dim); }
+button.ghost {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+  font: 13px/1 ui-monospace, monospace; color: var(--gold); cursor: pointer;
 }
 a { color: inherit; text-decoration: none; }
 button, .linkish { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }

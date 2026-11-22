@@ -78,6 +78,7 @@ class BookConfig:
     paths: int = 400
     seed: int = 13
     strategy: str = "wheel"
+    rules: tuple[str, ...] = ()
     slippage: float = 0.05
     lambda_j: float = 0.7
     mu_j: float = -0.07
@@ -499,6 +500,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
         spot = float(spot)
         day_trades = []
         steps: list[dict] = []
+        rule_log: list[dict] = []
         min_spot = min(min_spot, spot)
         sigma = _iv_at(spot, cfg.spot, cfg.iv, cfg.iv_elasticity)
         before = snap(spot, t, sigma)
@@ -526,7 +528,9 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                 start = len(day_trades)
                 for order in rule.apply(position):
                     execute(order)
-                if len(day_trades) > start:
+                acted = len(day_trades) > start
+                rule_log.append({"name": rule.name, "acted": acted})
+                if acted:
                     steps.append({
                         "rule": rule.name,
                         "trades": day_trades[start:],
@@ -556,6 +560,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
             "trades": day_trades,
             "position": snap(spot, t, sigma),
             "steps": steps,
+            "rules": rule_log,
         })
 
     return {
@@ -720,7 +725,20 @@ def run(cfg: BookConfig | None = None) -> dict:
         for leg in book["legs"]
         if leg.kind == "put"
     ]
-    from tqqq_book.strategy import describe, rules_for
+    from tqqq_book.strategy import catalogue, describe, rules_for
+    fired = {rule["name"]: 0 for rule in catalogue(cfg)}
+    for path in paths:
+        seen = set()
+        for day in path.get("days") or []:
+            for row in day.get("rules") or []:
+                if row.get("acted"):
+                    seen.add(row["name"])
+        for name in seen:
+            fired[name] = fired.get(name, 0) + 1
+    rules = []
+    for row in catalogue(cfg):
+        row["paths"] = fired.get(row["name"], 0)
+        rules.append(row)
     result = {
         "note": (
             "Opening premiums are this repo's analytic Black-Scholes at the opening spot, "
@@ -746,6 +764,7 @@ def run(cfg: BookConfig | None = None) -> dict:
             "tqqq_vol": cfg.tqqq_vol,
             "qqq_mu": cfg.qqq_mu,
             "strategy": cfg.strategy,
+            "rules": list(cfg.rules),
             "paths": cfg.paths,
             "seed": cfg.seed,
             "tenors": [{"tag": t.tag, "days": t.days, "otm": t.otm, "contracts": _qty(t.contracts, cfg.lots)} for t in cfg.tenors],
@@ -762,7 +781,7 @@ def run(cfg: BookConfig | None = None) -> dict:
         },
         "monte_carlo": _summary(cfg.strategy, rows),
         "vol": _vol_view(cfg),
-        "rules": describe(rules_for(cfg)),
+        "rules": rules,
         "ribbon": _ribbon(spots, navs, trade_counts),
         "median_path": _median_path(paths),
     }
@@ -837,6 +856,11 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
         paths=int(pick("paths", "nPaths", default=base.paths)),
         seed=int(pick("seed", default=base.seed)),
         strategy=str(pick("strategy", default=base.strategy)),
+        rules=tuple(
+            part.strip()
+            for part in str(pick("rules", default="")).split(",")
+            if part.strip()
+        ),
         tenors=tenors,
         put_sleeves=put_sleeves,
     )
@@ -857,7 +881,7 @@ def main() -> None:
     parser.add_argument("--drift", type=float, default=0.12)
     parser.add_argument("--paths", type=int, default=400)
     parser.add_argument("--seed", type=int, default=13)
-    parser.add_argument("--strategy", default="wheel", choices=("wheel", "hold"))
+    parser.add_argument("--rules", default="", help="Comma separated rule names to leave on. Empty means all on.")
     parser.add_argument("--report", default="", help="Write an HTML desk report to this path.")
     parser.add_argument("--rebuild", action="store_true", help="Rewrite the latest desk.html from the saved run. Does not resimulate.")
     args = parser.parse_args()

@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { createInterface } from "readline";
 import { join, resolve } from "path";
@@ -132,6 +132,8 @@ export class RunsService {
       "--otm", text("otm", "0.03,0.05,0.08,0.10"),
       "--contracts", text("contracts", "12,12,12,10"),
     ];
+    const rules = text("rules", "");
+    if (rules) args.push("--rules", rules);
     const venv = join(this.repo, ".venv", "bin", "python");
     const python = existsSync(venv) ? venv : "python3";
     this.jobs.set(id, { status: "running", log: "" });
@@ -164,6 +166,39 @@ export class RunsService {
 
   job(id: string) {
     return this.jobs.get(id) || null;
+  }
+
+  catalogue() {
+    const python = existsSync(join(this.repo, ".venv", "bin", "python"))
+      ? join(this.repo, ".venv", "bin", "python")
+      : "python3";
+    const code = "from tqqq_book.desk import BookConfig; from tqqq_book.strategy import catalogue; import json; print(json.dumps(catalogue(BookConfig())))";
+    const out = spawnSync(python, ["-c", code], { cwd: this.repo, env: { ...process.env, PYTHONPATH: "src" } });
+    if (out.status !== 0) return [];
+    return JSON.parse(out.stdout.toString() || "[]");
+  }
+
+  reread(id: string, body: Record<string, string>) {
+    const run = this.get(id);
+    if (!run) return null;
+    const cfg = run.config || {};
+    const sleeves = (cfg.put_sleeves || []).map((row: { weight: number; dte: number; roll_at: number }) =>
+      `${Math.round(row.weight * 100)}:${row.dte}:${row.roll_at}`
+    ).join(",");
+    const tenors = cfg.tenors || [];
+    return this.simulate({
+      lots: String(cfg.lots || 100),
+      horizon: String(cfg.horizon_days || 100),
+      paths: String(cfg.paths || 100),
+      seed: String(cfg.seed || 13),
+      spot: String(cfg.spot || 59.22),
+      iv: String(cfg.iv || 0.71),
+      strategy: cfg.strategy || "wheel",
+      puts: sleeves || "10:60:30,40:90:45,50:180:90",
+      otm: tenors.map((row: { otm: number }) => row.otm).join(",") || "0.03,0.05,0.08,0.10",
+      contracts: tenors.map((row: { contracts: number }) => row.contracts).join(",") || "12,12,12,10",
+      rules: body.rules || "",
+    });
   }
 
   private aggregate(file: string) {

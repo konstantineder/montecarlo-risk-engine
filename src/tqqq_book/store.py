@@ -29,6 +29,7 @@ def save_run(result: dict, paths: list[dict]) -> dict:
         "book": result["book"],
         "monte_carlo": result["monte_carlo"],
         "vol": result["vol"],
+        "rules": result.get("rules") or [],
         "ribbon": result["ribbon"],
         "median_path": result["median_path"],
     }

@@ -38,9 +38,21 @@ export class RunsController {
     return row;
   }
 
+  @Get("rules")
+  rules() {
+    return this.runs.catalogue();
+  }
+
   @Post("simulate")
   simulate(@Body() body: Record<string, string>) {
     return this.runs.simulate(body || {});
+  }
+
+  @Post("runs/:id/reread")
+  reread(@Param("id") id: string, @Body() body: Record<string, string>) {
+    const job = this.runs.reread(id, body || {});
+    if (!job) throw new NotFoundException(`No run ${id}`);
+    return job;
   }
 
   @Get("jobs/:id")
