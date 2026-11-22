@@ -15,3 +15,5 @@ build/
 tests/plots/
 tests/data/
 runs/
+desk-app/node_modules/
+desk-app/dist/
