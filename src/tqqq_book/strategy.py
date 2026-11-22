@@ -147,6 +147,38 @@ class CrashRoll:
 
 
 @dataclass(frozen=True)
+class RollUp:
+    """Trail the long puts up. Every $20 the stock rises, lift the put by $20."""
+
+    gap: float = 20.0
+    name: str = "roll_up"
+
+    def apply(self, position: Position) -> list[Order]:
+        orders = []
+        for leg in list(position.legs):
+            if not (leg.open and leg.side == "long" and leg.kind == "put" and leg.qty > 0):
+                continue
+            if position.spot < leg.strike + self.gap:
+                continue
+            target = float(int(position.spot // self.gap) * self.gap)
+            if target <= leg.strike:
+                continue
+            orders.append(Order(
+                self.name, "roll_put", leg.qty, target, leg.expiry, leg.tag,
+                tenor=leg.tenor, roll_at=leg.roll_at, leg=leg,
+                reason=f"from {leg.strike:.0f}, spot {position.spot:.0f}",
+            ))
+        return orders
+
+    def describe(self) -> dict:
+        return {
+            "name": self.name,
+            "says": "When the stock is $20 above a long put, roll that put up to the $20 below the stock. Locks a higher floor. Costs the roll.",
+            "gap": self.gap,
+        }
+
+
+@dataclass(frozen=True)
 class KeepTenor:
     """When a put has this many days left, sell it and buy the same strike back out at its own DTE."""
 
@@ -256,7 +288,10 @@ class ReplaceAssigned:
         position.assigned = []
         if room <= 0:
             return []
+        floor = _protective_strike(position.legs)
         strike = float(max(1, round(position.spot * (1.0 - self.otm))))
+        if floor:
+            strike = min(strike, floor)
         expiry = min(position.last, position.day + self.tenor)
         if expiry <= position.day:
             return []
@@ -269,7 +304,7 @@ class ReplaceAssigned:
     def describe(self) -> dict:
         return {
             "name": self.name,
-            "says": "While the long puts cover more shares than you hold, sell a short put under the current spot. Sell another when that one expires.",
+            "says": "While the long puts cover more shares than you hold, sell a short put under the spot, and never above the long put.",
             "otm": self.otm,
             "tenor": self.tenor,
         }
@@ -284,6 +319,7 @@ def rules_for(cfg) -> list:
         Harvest(drop=cfg.harvest_drop),
         CrashRoll(fraction=cfg.roll_fraction, spot=cfg.spot),
         KeepTenor(sleeves=tuple(cfg.put_sleeves)),
+        RollUp(),
         WriteCalls(tenors=tenors, lots=cfg.lots, spot=cfg.spot, min_spot_frac=cfg.stagger_min_spot_frac),
         ReplaceAssigned(),
     ]
