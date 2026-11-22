@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { spawn } from "child_process";
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { createInterface } from "readline";
 import { join, resolve } from "path";
@@ -23,9 +24,12 @@ export interface RunCard {
 @Injectable()
 export class RunsService {
   private readonly root: string;
+  private readonly repo: string;
+  private readonly jobs = new Map<string, { status: string; run?: string; error?: string; log: string }>();
 
   constructor() {
     this.root = resolve(process.env.RUNS_DIR || join(__dirname, "..", "..", "..", "runs"));
+    this.repo = resolve(this.root, "..");
   }
 
   list(): RunCard[] {
@@ -96,6 +100,115 @@ export class RunsService {
     const file = join(this.root, id, "paths.jsonl");
     if (!existsSync(file) || Number.isNaN(index)) return null;
     return this.findLine(file, (row) => row.path === index);
+  }
+
+  series(id: string) {
+    const file = join(this.root, id, "paths.jsonl");
+    if (!existsSync(file)) return null;
+    return this.aggregate(file);
+  }
+
+  simulate(body: Record<string, string>) {
+    const id = Date.now().toString(36);
+    const num = (key: string, fallback: number) => {
+      const value = Number(body[key]);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    const text = (key: string, fallback: string) => {
+      const value = String(body[key] || "").trim();
+      return /^[0-9A-Za-z_.,:+\- ]+$/.test(value) ? value : fallback;
+    };
+    const strategy = body.strategy === "hold" ? "hold" : "wheel";
+    const args = [
+      "-m", "tqqq_book",
+      "--lots", String(num("lots", 100)),
+      "--horizon", String(num("horizon", 100)),
+      "--paths", String(num("paths", 100)),
+      "--seed", String(num("seed", 13)),
+      "--spot", String(num("spot", 59.22)),
+      "--iv", String(num("iv", 0.71)),
+      "--strategy", strategy,
+      "--puts", text("puts", "10:60:30,40:90:45,50:180:90"),
+      "--otm", text("otm", "0.03,0.05,0.08,0.10"),
+      "--contracts", text("contracts", "12,12,12,10"),
+    ];
+    const venv = join(this.repo, ".venv", "bin", "python");
+    const python = existsSync(venv) ? venv : "python3";
+    this.jobs.set(id, { status: "running", log: "" });
+    const child = spawn(python, args, {
+      cwd: this.repo,
+      env: { ...process.env, PYTHONPATH: "src" },
+    });
+    child.stdout.on("data", (chunk) => {
+      const job = this.jobs.get(id);
+      if (job) job.log = (job.log + chunk.toString()).slice(-4000);
+    });
+    child.stderr.on("data", (chunk) => {
+      const job = this.jobs.get(id);
+      if (job) job.log = (job.log + chunk.toString()).slice(-4000);
+    });
+    child.on("close", (code) => {
+      const job = this.jobs.get(id);
+      if (!job) return;
+      if (code === 0) {
+        const newest = this.list()[0];
+        job.status = "done";
+        job.run = newest?.id;
+      } else {
+        job.status = "error";
+        job.error = job.log || `exit ${code}`;
+      }
+    });
+    return { job: id };
+  }
+
+  job(id: string) {
+    return this.jobs.get(id) || null;
+  }
+
+  private aggregate(file: string) {
+    return new Promise((resolveRows, reject) => {
+      const byDay = new Map<number, { shares: number[]; puts: number[]; shortCalls: number[]; shortPuts: number[] }>();
+      const stream = createReadStream(file);
+      const lines = createInterface({ input: stream });
+      lines.on("line", (line) => {
+        if (!line.trim()) return;
+        const row = JSON.parse(line);
+        for (const day of row.days || []) {
+          let shares = 0, puts = 0, shortCalls = 0, shortPuts = 0;
+          for (const leg of day.position || []) {
+            const qty = Number(leg.qty) || 0;
+            if (leg.name === "share") shares = qty;
+            else if (leg.name === "put" && leg.side === "long") puts += qty;
+            else if (leg.name === "call" && leg.side === "short") shortCalls += qty;
+            else if (leg.name === "put" && leg.side === "short") shortPuts += qty;
+          }
+          const bucket = byDay.get(day.day) || { shares: [], puts: [], shortCalls: [], shortPuts: [] };
+          bucket.shares.push(shares / 100);
+          bucket.puts.push(puts);
+          bucket.shortCalls.push(shortCalls);
+          bucket.shortPuts.push(shortPuts);
+          byDay.set(day.day, bucket);
+        }
+      });
+      lines.on("close", () => {
+        const median = (values: number[]) => {
+          const sorted = values.slice().sort((a, b) => a - b);
+          return sorted[Math.floor(sorted.length / 2)] || 0;
+        };
+        resolveRows([...byDay.keys()].sort((a, b) => a - b).map((day) => {
+          const bucket = byDay.get(day)!;
+          return {
+            day,
+            shares: median(bucket.shares),
+            puts: median(bucket.puts),
+            shortCalls: median(bucket.shortCalls),
+            shortPuts: median(bucket.shortPuts),
+          };
+        }));
+      });
+      lines.on("error", reject);
+    });
   }
 
   private readLines(file: string, map: (row: any) => any): Promise<any[]> {

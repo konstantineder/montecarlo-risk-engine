@@ -61,39 +61,83 @@ function table(headers, rows, onClick) {
   return grid;
 }
 
+function frame(width, height, left, right, top, bottom, xMin, xMax, yMin, yMax, yLabel) {
+  let grid = "";
+  for (let i = 0; i < 5; i++) {
+    const value = yMin + ((yMax - yMin) * i) / 4;
+    const yy = top + (1 - i / 4) * (height - top - bottom);
+    grid += `<line x1="${left}" y1="${yy.toFixed(1)}" x2="${width - right}" y2="${yy.toFixed(1)}" stroke="#3a342b"/>`;
+    grid += `<text x="${left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${yLabel(value)}</text>`;
+  }
+  const ticks = 6;
+  for (let i = 0; i < ticks; i++) {
+    const day = xMin + ((xMax - xMin) * i) / (ticks - 1);
+    const xx = left + (i / (ticks - 1)) * (width - left - right);
+    grid += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${height - bottom}" stroke="#2a261f"/>`;
+    grid += `<text x="${xx.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${Math.round(day)}</text>`;
+  }
+  grid += `<text x="${(left + width - right) / 2}" y="${height - 2}" text-anchor="middle" fill="#6f675c" font-size="10" font-family="ui-monospace,monospace">day</text>`;
+  return { grid, x: (day) => left + ((day - xMin) / (xMax - xMin || 1)) * (width - left - right), y: (v) => top + (1 - (v - yMin) / (yMax - yMin || 1)) * (height - top - bottom) };
+}
+
+function bandChart(rows, lowKey, midKey, highKey, opts = {}) {
+  const width = 720, height = 280, left = 78, right = 16, top = 16, bottom = 36;
+  const lows = rows.map((d) => d[lowKey]), mids = rows.map((d) => d[midKey]), highs = rows.map((d) => d[highKey]);
+  let y0 = Math.min(...lows), y1 = Math.max(...highs);
+  if (opts.zero) { y0 = Math.min(y0, 0); y1 = Math.max(y1, 0); }
+  const span = y1 - y0 || 1;
+  y0 -= span * 0.06; y1 += span * 0.06;
+  const last = rows[rows.length - 1].day || 1;
+  const f = frame(width, height, left, right, top, bottom, 0, last, y0, y1, opts.money ? money : (v) => v.toFixed(1));
+  const upper = rows.map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[highKey]).toFixed(1)}`).join(" ");
+  const lower = rows.slice().reverse().map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[lowKey]).toFixed(1)}`).join(" ");
+  const mid = rows.map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[midKey]).toFixed(1)}`).join(" ");
+  const zero = opts.zero && y0 <= 0 && y1 >= 0
+    ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
+    : "";
+  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polygon points="${upper} ${lower}" fill="#e6d3a3" opacity="0.16"/><polyline points="${mid}" fill="none" stroke="#e6d3a3" stroke-width="1.8"/></svg>`;
+}
+
+function multiChart(rows, series, opts = {}) {
+  const width = 720, height = 280, left = 78, right = 16, top = 28, bottom = 36;
+  const all = [0];
+  series.forEach((s) => rows.forEach((r) => all.push(r[s.key])));
+  let y0 = Math.min(...all), y1 = Math.max(...all);
+  if (y1 === y0) y1 += 1;
+  const span = y1 - y0 || 1;
+  y0 -= span * 0.06; y1 += span * 0.08;
+  const last = rows[rows.length - 1].day || 1;
+  const f = frame(width, height, left, right, top, bottom, 0, last, y0, y1, opts.money ? money : (v) => String(Math.round(v)));
+  let legend = "";
+  series.forEach((s, i) => {
+    const x0 = left + i * 150;
+    legend += `<line x1="${x0}" y1="12" x2="${x0 + 18}" y2="12" stroke="${s.color}" stroke-width="2"/>`;
+    legend += `<text x="${x0 + 24}" y="16" fill="#c8c0b4" font-size="11" font-family="ui-monospace,monospace">${s.label}</text>`;
+  });
+  const lines = series.map((s) => {
+    const points = rows.map((r) => `${f.x(r.day).toFixed(1)},${f.y(r[s.key]).toFixed(1)}`).join(" ");
+    return `<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="1.8"/>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${legend}${lines}</svg>`;
+}
 function chart(days, key, opts = {}) {
   const ordered = days.slice().sort((a, b) => a.day - b.day);
-  const width = 1040, height = 260, left = 78, right = 16, top = 16, bottom = 32;
+  const width = 720, height = 280, left = 78, right = 16, top = 16, bottom = 36;
   const values = ordered.map((d) => d[key]);
   let low = Math.min(...values), high = Math.max(...values);
   if (opts.zero) { low = Math.min(low, 0); high = Math.max(high, 0); }
   const span = high - low || 1;
   low -= span * 0.06; high += span * 0.06;
   const last = ordered[ordered.length - 1].day || 1;
-  const x = (day) => left + (day / last) * (width - left - right);
-  const y = (v) => top + (1 - (v - low) / (high - low)) * (height - top - bottom);
-  const label = opts.money ? (v) => money(v) : (v) => v.toFixed(1);
-  let grid = "";
-  for (let i = 0; i < 5; i++) {
-    const value = low + ((high - low) * i) / 4;
-    const yy = y(value);
-    grid += `<line x1="${left}" y1="${yy.toFixed(1)}" x2="${width - right}" y2="${yy.toFixed(1)}" stroke="#3a342b"/>`;
-    grid += `<text x="${left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${label(value)}</text>`;
-  }
-  for (let i = 0; i < 6; i++) {
-    const day = Math.round((last * i) / 5);
-    const xx = x(day);
-    grid += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${height - bottom}" stroke="#2a261f"/>`;
-    grid += `<text x="${xx.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${day}</text>`;
-  }
-  const line = ordered.map((d) => `${x(d.day).toFixed(1)},${y(d[key]).toFixed(1)}`).join(" ");
+  const f = frame(width, height, left, right, top, bottom, 0, last, low, high, opts.money ? money : (v) => v.toFixed(1));
+  const line = ordered.map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[key]).toFixed(1)}`).join(" ");
   const dots = ordered.filter((d) => d.trades && d.trades.length).map((d) =>
-    `<circle cx="${x(d.day).toFixed(1)}" cy="${y(d[key]).toFixed(1)}" r="3.2" fill="#f3efe4"/>`
+    `<circle cx="${f.x(d.day).toFixed(1)}" cy="${f.y(d[key]).toFixed(1)}" r="3.2" fill="#f3efe4"/>`
   ).join("");
   const zero = opts.zero && low <= 0 && high >= 0
-    ? `<line x1="${left}" y1="${y(0).toFixed(1)}" x2="${width - right}" y2="${y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
+    ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
     : "";
-  return `<svg viewBox="0 0 ${width} ${height}">${grid}${zero}<polyline points="${line}" fill="none" stroke="#e6d3a3" stroke-width="1.8"/>${dots}</svg>`;
+  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polyline points="${line}" fill="none" stroke="#e6d3a3" stroke-width="1.8"/>${dots}</svg>`;
 }
 
 function linesChart(days, series) {
@@ -148,32 +192,24 @@ function bookCounts(day) {
 }
 
 function scatter(rows) {
-  const width = 1040, height = 280, left = 78, right = 16, top = 16, bottom = 32;
+  const width = 720, height = 280, left = 78, right = 16, top = 16, bottom = 36;
   const xs = rows.map((r) => r.ending_spot), ys = rows.map((r) => r.pnl);
   let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys, 0), y1 = Math.max(...ys, 0);
   const sx = x1 - x0 || 1, sy = y1 - y0 || 1;
   x0 -= sx * 0.06; x1 += sx * 0.06; y0 -= sy * 0.06; y1 += sy * 0.06;
-  const X = (v) => left + ((v - x0) / (x1 - x0)) * (width - left - right);
-  const Y = (v) => top + (1 - (v - y0) / (y1 - y0)) * (height - top - bottom);
-  let grid = "";
-  for (let i = 0; i < 5; i++) {
-    const value = y0 + ((y1 - y0) * i) / 4;
-    const yy = Y(value);
-    grid += `<line x1="${left}" y1="${yy.toFixed(1)}" x2="${width - right}" y2="${yy.toFixed(1)}" stroke="#3a342b"/>`;
-    grid += `<text x="${left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${money(value)}</text>`;
-  }
+  const f = frame(width, height, left, right, top, bottom, x0, x1, y0, y1, money);
   const dots = rows.map((r) =>
-    `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${X(r.ending_spot).toFixed(1)}" cy="${Y(r.pnl).toFixed(1)}" r="4.2" fill="${r.pnl < 0 ? "#d07a62" : "#e6d3a3"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
+    `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${f.x(r.ending_spot).toFixed(1)}" cy="${f.y(r.pnl).toFixed(1)}" r="4" fill="${r.pnl < 0 ? "#d07a62" : "#e6d3a3"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
   ).join("");
   const zero = y0 <= 0 && y1 >= 0
-    ? `<line x1="${left}" y1="${Y(0).toFixed(1)}" x2="${width - right}" y2="${Y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
+    ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
     : "";
-  return `<svg viewBox="0 0 ${width} ${height}">${grid}${zero}${dots}</svg>`;
+  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}${dots}</svg>`;
 }
 
 function histogram(rows) {
   const values = rows.map((r) => r.pnl);
-  const bins = 16;
+  const bins = 18;
   const low = Math.min(...values), high = Math.max(...values);
   const span = high - low || 1;
   const counts = Array(bins).fill(0);
@@ -182,7 +218,8 @@ function histogram(rows) {
     counts[i] += 1;
   });
   const max = Math.max(...counts, 1);
-  const width = 1040, height = 200, left = 78, right = 16, top = 12, bottom = 28;
+  const width = 720, height = 240, left = 78, right = 16, top = 16, bottom = 36;
+  const f = frame(width, height, left, right, top, bottom, low, high, 0, max, (v) => String(Math.round(v)));
   const bw = (width - left - right) / bins;
   let bars = "";
   counts.forEach((c, i) => {
@@ -190,9 +227,35 @@ function histogram(rows) {
     const x = left + i * bw;
     const y = height - bottom - h;
     const mid = low + ((i + 0.5) / bins) * span;
-    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 3).toFixed(1)}" height="${h.toFixed(1)}" fill="${mid < 0 ? "#d07a62" : "#e6d3a3"}" opacity="0.85"><title>${money(mid)} · ${c}</title></rect>`;
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${mid < 0 ? "#d07a62" : "#e6d3a3"}" opacity="0.85"><title>${money(mid)} · ${c} paths</title></rect>`;
   });
-  return `<svg viewBox="0 0 ${width} ${height}">${bars}<text x="${left}" y="${height - 8}" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${money(low)}</text><text x="${width - right}" y="${height - 8}" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${money(high)}</text></svg>`;
+  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${bars}</svg>`;
+}
+
+function chartCard(title, note, svg) {
+  const card = document.createElement("article");
+  card.className = "chart-card";
+  const head = document.createElement("header");
+  const text = document.createElement("div");
+  text.innerHTML = `<h3>${title}</h3><p>${note}</p>`;
+  const btn = document.createElement("button");
+  btn.className = "max";
+  btn.textContent = "Maximize";
+  btn.addEventListener("click", () => maximize(title, note, svg));
+  head.append(text, btn);
+  const body = document.createElement("div");
+  body.innerHTML = svg;
+  card.append(head, body);
+  return card;
+}
+
+function maximize(title, note, svg) {
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.innerHTML = `<div class="sheet"><header><div><h2>${title}</h2><p class="note">${note}</p></div><button>Close</button></header>${svg}</div>`;
+  modal.querySelector("button").addEventListener("click", () => modal.remove());
+  modal.addEventListener("click", (event) => { if (event.target === modal) modal.remove(); });
+  document.body.append(modal);
 }
 
 const state = { run: null, path: null, day: null };
@@ -208,10 +271,50 @@ function route() {
 
 async function showHome() {
   crumb.textContent = "Simulations";
-  app.innerHTML = "<h1>Simulations</h1><p class='lede'>Each card is a saved Monte Carlo run. Open one to see the book, the path cloud, and every path.</p>";
+  app.innerHTML = "<h1>Simulations</h1><p class='lede'>Start a run, or open one that is already saved.</p>";
+  const form = document.createElement("form");
+  form.className = "form";
+  form.innerHTML = `
+    <label>Lots<input name="lots" value="100"/></label>
+    <label>Horizon days<input name="horizon" value="100"/></label>
+    <label>Paths<input name="paths" value="100"/></label>
+    <label>Seed<input name="seed" value="13"/></label>
+    <label>Spot<input name="spot" value="59.22"/></label>
+    <label>IV<input name="iv" value="0.71"/></label>
+    <label>Strategy<select name="strategy"><option>wheel</option><option>hold</option></select></label>
+    <label>Contracts<input name="contracts" value="12,12,12,10"/></label>
+    <label class="wide">Put sleeves percent:dte:roll<input name="puts" value="10:60:30,40:90:45,50:180:90"/></label>
+    <label class="wide">Call OTM 1w,2w,3w,4w<input name="otm" value="0.03,0.05,0.08,0.10"/></label>
+    <button class="run" type="submit">Run simulation</button>`;
+  const status = document.createElement("p");
+  status.className = "status";
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(form).entries());
+    form.querySelector("button").disabled = true;
+    status.textContent = "Starting…";
+    const started = await fetch("/api/simulate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    const tick = async () => {
+      const job = await get(`/api/jobs/${started.job}`);
+      if (job.status === "done") {
+        status.textContent = "Done.";
+        location.hash = `#/run/${job.run}`;
+        return;
+      }
+      if (job.status === "error") {
+        status.textContent = job.error || "The run failed.";
+        form.querySelector("button").disabled = false;
+        return;
+      }
+      status.textContent = "Running. A hundred paths takes a little while.";
+      setTimeout(tick, 2000);
+    };
+    tick();
+  });
+  app.append(form, status);
   const runs = await get("/api/runs");
   if (!runs.length) {
-    app.insertAdjacentHTML("beforeend", "<p class='empty'>No runs yet. Run the desk, then come back.</p>");
+    app.insertAdjacentHTML("beforeend", "<p class='empty'>No runs yet.</p>");
     return;
   }
   const cards = document.createElement("div");
@@ -235,7 +338,11 @@ async function showRun(id) {
   state.run = id;
   crumb.innerHTML = `<a href="#/">Simulations</a> / <span>${id}</span>`;
   app.innerHTML = "<p class='lede'>Loading the run…</p>";
-  const [run, paths] = await Promise.all([get(`/api/runs/${id}`), get(`/api/runs/${id}/paths`)]);
+  const [run, paths, series] = await Promise.all([
+    get(`/api/runs/${id}`),
+    get(`/api/runs/${id}/paths`),
+    get(`/api/runs/${id}/series`),
+  ]);
   const mc = run.monte_carlo || {};
   const book = run.book || {};
   const cfg = run.config || {};
@@ -244,7 +351,7 @@ async function showRun(id) {
   h.textContent = `${cfg.strategy || "wheel"} · ${cfg.lots || ""} lots`;
   const lede = document.createElement("p");
   lede.className = "lede";
-  lede.textContent = `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d. Click a path, or a point on the cloud.`;
+  lede.textContent = `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d. Maximize any chart. Click a point or a row for the path.`;
   app.append(h, lede);
   app.append(facts([
     ["Median P&L", money(mc.median)],
@@ -257,26 +364,33 @@ async function showRun(id) {
     ["Floor", money(book.floor)],
   ]));
 
-  const cloudTitle = document.createElement("h2");
-  cloudTitle.textContent = "Where the paths landed";
-  const cloudNote = document.createElement("p");
-  cloudNote.className = "note";
-  cloudNote.textContent = "Each point is a path. Horizontal is the ending spot, vertical is the P&L. Gold finished up, brick finished down. Click a point.";
-  const cloud = document.createElement("div");
-  cloud.innerHTML = scatter(paths);
-  const histTitle = document.createElement("h2");
-  histTitle.textContent = "P&L distribution";
-  const hist = document.createElement("div");
-  hist.innerHTML = histogram(paths);
-  app.append(cloudTitle, cloudNote, cloud, histTitle, hist);
-
-  if (run.ribbon && run.ribbon.length) {
-    const band = document.createElement("h2");
-    band.textContent = "Spot band across every path";
-    const svg = document.createElement("div");
-    svg.innerHTML = ribbonChart(run.ribbon);
-    app.append(band, svg);
+  const grid = document.createElement("div");
+  grid.className = "chart-grid";
+  const ribbon = run.ribbon || [];
+  if (ribbon.length) {
+    grid.append(
+      chartCard("Spot band", "5th to 95th across every path. Line is the median.", bandChart(ribbon, "spot_p05", "spot_p50", "spot_p95")),
+      chartCard("P&L band", "5th to 95th. Dashed line is zero.", bandChart(ribbon, "pnl_p05", "pnl_p50", "pnl_p95", { zero: true, money: true })),
+      chartCard("Mark to market", "5th to 95th of cash plus marks.", bandChart(ribbon, "mtm_p05", "mtm_p50", "mtm_p95", { money: true })),
+    );
   }
+  if (series.length) {
+    grid.append(chartCard(
+      "Position, median path",
+      "Contracts. Shares are divided by 100 so they sit next to the puts.",
+      multiChart(series, [
+        { key: "shares", color: "#e6d3a3", label: "shares ÷ 100" },
+        { key: "puts", color: "#7d9a84", label: "long puts" },
+        { key: "shortCalls", color: "#c8b48a", label: "short calls" },
+        { key: "shortPuts", color: "#d07a62", label: "short puts" },
+      ]),
+    ));
+  }
+  grid.append(
+    chartCard("Where paths landed", "Horizontal is ending spot, vertical is P&L. Click a point.", scatter(paths)),
+    chartCard("P&L distribution", "Brick is a loss. Gold is a gain. Left axis is the path count.", histogram(paths)),
+  );
+  app.append(grid);
 
   const legs = [...(book.puts || []), ...(book.calls || [])];
   if (legs.length) {
@@ -364,18 +478,21 @@ async function showPath(id, index) {
     ["Roll cash", money(row.roll_cash)],
   ]));
   const charts = document.createElement("div");
-  charts.className = "charts";
-  charts.innerHTML = `
-    <div><h3>Spot. Dots are trade days.</h3>${chart(days, "price")}</div>
-    <div><h3>P&L. Dashed line is zero.</h3>${chart(days, "pnl", { zero: true, money: true })}</div>
-    <div><h3>Cover. Shares ÷ 100 against the long puts.</h3>${linesChart(days, [
+  charts.className = "chart-grid";
+  const cover = days.map((d) => ({ day: d.day, ...bookCounts(d) }));
+  charts.append(
+    chartCard("Spot", "Left is the price. Dots are trade days.", chart(days, "price")),
+    chartCard("P&L", "Dashed line is zero.", chart(days, "pnl", { zero: true, money: true })),
+    chartCard("Mark to market", "Cash plus the marks on shares and options.", chart(days, "mtm", { money: true })),
+    chartCard("Cover", "Shares ÷ 100 against the long puts. They should stay near each other.", multiChart(cover, [
       { key: "shares", color: "#e6d3a3", label: "shares ÷ 100" },
       { key: "puts", color: "#7d9a84", label: "long puts" },
-    ])}</div>
-    <div><h3>Short options still open.</h3>${linesChart(days, [
+    ])),
+    chartCard("Short options open", "Calls still sold, and puts sold to get the shares back.", multiChart(cover, [
       { key: "shortCalls", color: "#e6d3a3", label: "short calls" },
       { key: "shortPuts", color: "#d07a62", label: "short puts" },
-    ])}</div>`;
+    ])),
+  );
   app.append(charts);
 
   const dayTitle = document.createElement("h2");

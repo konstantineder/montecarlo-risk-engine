@@ -32,8 +32,46 @@ header.bar {
 header.bar .brand { font-size: 18px; letter-spacing: 0.02em; }
 header.bar .crumb { color: var(--dim); font: 13px/1 ui-monospace, monospace; }
 header.bar .crumb span { color: var(--gold); }
-main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 72px; }
-h1 { font-weight: 500; font-size: 34px; margin: 0 0 6px; }
+main { max-width: 1440px; margin: 0 auto; padding: 24px 20px 72px; }
+h1 { font-weight: 500; font-size: 32px; margin: 0 0 6px; }
+.form {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 0 0 22px;
+}
+.form label { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font: 11px/1.2 ui-monospace, monospace; letter-spacing: 0.04em; text-transform: uppercase; }
+.form input, .form select {
+  background: #14120e; color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; font: 14px/1.2 ui-monospace, monospace;
+}
+.form .wide { grid-column: span 2; }
+.form button.run {
+  align-self: end; background: var(--gold); color: #14120e; border: 0; border-radius: 8px;
+  padding: 9px 14px; font: 14px/1 ui-monospace, monospace; cursor: pointer;
+}
+.form button.run:disabled { opacity: 0.5; }
+.status { color: var(--gold); font: 13px/1.4 ui-monospace, monospace; margin: 0 0 16px; }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0 8px; }
+.chart-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 12px 8px; min-width: 0; }
+.chart-card header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.chart-card h3 { margin: 0; font-size: 15px; }
+.chart-card p { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
+.chart-card button.max {
+  color: var(--dim); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px;
+  font: 11px/1 ui-monospace, monospace; cursor: pointer;
+}
+.chart-card svg, .modal svg { width: 100%; height: auto; background: transparent; }
+.modal {
+  position: fixed; inset: 0; z-index: 20; background: rgba(10, 9, 7, 0.86);
+  display: flex; align-items: center; justify-content: center; padding: 28px;
+}
+.modal .sheet {
+  width: min(1400px, 100%); background: var(--card); border: 1px solid var(--line);
+  border-radius: 16px; padding: 16px 18px 12px;
+}
+.modal header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.modal h2 { margin: 0; font-size: 20px; }
+.modal button { color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: 13px/1 ui-monospace, monospace; cursor: pointer; }
+@media (max-width: 900px) { .chart-grid, .form { grid-template-columns: 1fr; } .form .wide { grid-column: span 1; } }
 h2 { font-weight: 500; font-size: 18px; margin: 28px 0 10px; }
 h3 { font-weight: 500; font-size: 15px; margin: 0 0 6px; }
 .lede { color: var(--muted); margin: 0 0 22px; max-width: 68ch; }
