@@ -855,6 +855,9 @@ def parse_ratio_grid(text: str) -> tuple:
             raise ValueError(f"Bad ratio step {part}")
         rows.append((level / 100.0, ratio))
     return tuple(sorted(rows))
+
+
+def parse_put_sleeves(text: str) -> tuple[PutSleeve, ...]:
     """'10:60:30,40:90:45,50:180:90' is percent, DTE, roll-at DTE."""
     sleeves = []
     for part in str(text).split(","):
