@@ -108,6 +108,39 @@ export class RunsService {
     return this.aggregate(file);
   }
 
+  streamJson(id: string, res: any) {
+    const summary = this.get(id);
+    const file = join(this.root, id, "paths.jsonl");
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Disposition", `attachment; filename="${id}.json"`);
+    res.write(`{"summary":${JSON.stringify(summary)},"paths":[`);
+    let first = true;
+    const stream = createReadStream(file);
+    const lines = createInterface({ input: stream });
+    lines.on("line", (line) => {
+      if (!line.trim()) return;
+      res.write(first ? line : `,${line}`);
+      first = false;
+    });
+    lines.on("close", () => {
+      res.end("]}");
+    });
+    lines.on("error", () => res.end());
+  }
+
+  streamCsv(id: string, res: any) {
+    const python = existsSync(join(this.repo, ".venv", "bin", "python"))
+      ? join(this.repo, ".venv", "bin", "python")
+      : "python3";
+    const script = join(this.repo, "desk-app", "export_run.py");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${id}.zip"`);
+    const child = spawn(python, [script, join(this.root, id)]);
+    child.stdout.pipe(res);
+    child.stderr.on("data", () => undefined);
+    child.on("error", () => res.end());
+  }
+
   simulate(body: Record<string, string>) {
     const id = Date.now().toString(36);
     const num = (key: string, fallback: number) => {

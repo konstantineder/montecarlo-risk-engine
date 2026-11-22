@@ -401,6 +401,16 @@ async function showConfig() {
   app.append(form, status);
 }
 
+function exportBar(id) {
+  const bar = document.createElement("div");
+  bar.className = "exports";
+  bar.innerHTML = `
+    <a class="ghost" href="/api/runs/${id}/export.json">Export JSON</a>
+    <a class="ghost" href="/api/runs/${id}/export.csv">Export CSV</a>
+    <span class="note">JSON is the whole simulation in one file. CSV is a zip: summary, paths, days, trades, positions, rules.</span>`;
+  return bar;
+}
+
 function ruleSnapshot(rules) {
   const wrap = document.createElement("div");
   (rules || []).forEach((rule) => {
@@ -499,7 +509,7 @@ async function showRun(id) {
   const lede = document.createElement("p");
   lede.className = "lede";
   lede.textContent = `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d. Maximize any chart. Click a point or a row for the path.`;
-  app.append(h, lede);
+  app.append(h, lede, exportBar(id));
   app.append(facts([
     ["Median P&L", money(mc.median)],
     ["Mean", money(mc.mean)],
@@ -653,7 +663,7 @@ async function showPath(id, index) {
   const lede = document.createElement("p");
   lede.className = "lede";
   lede.textContent = "Spot, P&L, the cover, and the open shorts. Click a day for the book before and after each rule.";
-  app.append(h, lede, facts([
+  app.append(h, lede, exportBar(id), facts([
     ["End spot", px(row.ending_spot)],
     ["P&L", money(row.pnl)],
     ["Min spot", px(row.min_spot)],

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, NotFoundException, Param, Post, Res } from "@nestjs/common";
 import { RunsService } from "./runs.service";
 
 @Controller("api")
@@ -29,6 +29,18 @@ export class RunsController {
     const rows = this.runs.series(id);
     if (!rows) throw new NotFoundException(`No run ${id}`);
     return rows;
+  }
+
+  @Get("runs/:id/export.json")
+  exportJson(@Param("id") id: string, @Res() res: any) {
+    if (!this.runs.get(id)) throw new NotFoundException(`No run ${id}`);
+    this.runs.streamJson(id, res);
+  }
+
+  @Get("runs/:id/export.csv")
+  exportCsv(@Param("id") id: string, @Res() res: any) {
+    if (!this.runs.get(id)) throw new NotFoundException(`No run ${id}`);
+    this.runs.streamCsv(id, res);
   }
 
   @Get("runs/:id/paths/:index")
