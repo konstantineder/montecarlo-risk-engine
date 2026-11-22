@@ -199,15 +199,6 @@ def build_book(cfg: BookConfig) -> dict:
             if part <= 0:
                 continue
             puts.append((part, sleeve.dte, strike, f"{name}-{sleeve.tag}", sleeve.dte, sleeve.roll_at))
-    long_dte = max(sleeve.dte for sleeve in sleeves)
-    # Longer calls stay on the 13 Nov strikes. The four weekly lines are
-    # struck from the OTM inputs, so those knobs change the opening credit.
-    extra = (
-        (_qty(12, cfg.lots), 25, _scaled_strike(68.0, cfg.spot), "w5", 0.0),
-        (_qty(10, cfg.lots), 30, _scaled_strike(70.0, cfg.spot), "w6", 0.0),
-        (_qty(10, cfg.lots), long_dte, _scaled_strike(65.0, cfg.spot), "mar65", 0.0),
-        (_qty(10, cfg.lots), long_dte, _scaled_strike(68.0, cfg.spot), "mar68", 0.0),
-    )
     weekly = []
     for tenor in cfg.tenors:
         strike = float(max(1, round(cfg.spot * (1.0 + tenor.otm))))
@@ -229,7 +220,7 @@ def build_book(cfg: BookConfig) -> dict:
             checked = True
         put_premium += entry * qty * CONTRACT
         legs.append(Leg("put", "long", strike, qty, expiry, entry, tag, tenor=tenor, roll_at=roll_at))
-    for qty, expiry, strike, tag, otm in [*weekly, *extra]:
+    for qty, expiry, strike, tag, otm in weekly:
         if qty <= 0 or expiry <= 0:
             continue
         t_years = expiry * DT

@@ -203,7 +203,7 @@ export class RunsService {
 
   private aggregate(file: string) {
     return new Promise((resolveRows, reject) => {
-      const byDay = new Map<number, { shares: number[]; puts: number[]; shortCalls: number[]; shortPuts: number[] }>();
+      const byDay = new Map<number, { shares: number[]; puts: number[]; shortCalls: number[]; shortPuts: number[]; floor: number[]; avg: number[] }>();
       const stream = createReadStream(file);
       const lines = createInterface({ input: stream });
       lines.on("line", (line) => {
@@ -211,18 +211,25 @@ export class RunsService {
         const row = JSON.parse(line);
         for (const day of row.days || []) {
           let shares = 0, puts = 0, shortCalls = 0, shortPuts = 0;
+          let floor = 0, weighted = 0;
           for (const leg of day.position || []) {
             const qty = Number(leg.qty) || 0;
             if (leg.name === "share") shares = qty;
-            else if (leg.name === "put" && leg.side === "long") puts += qty;
+            else if (leg.name === "put" && leg.side === "long") {
+              puts += qty;
+              weighted += qty * (Number(leg.strike) || 0);
+              floor = floor === 0 ? Number(leg.strike) : Math.min(floor, Number(leg.strike));
+            }
             else if (leg.name === "call" && leg.side === "short") shortCalls += qty;
             else if (leg.name === "put" && leg.side === "short") shortPuts += qty;
           }
-          const bucket = byDay.get(day.day) || { shares: [], puts: [], shortCalls: [], shortPuts: [] };
+          const bucket = byDay.get(day.day) || { shares: [], puts: [], shortCalls: [], shortPuts: [], floor: [], avg: [] };
           bucket.shares.push(shares / 100);
           bucket.puts.push(puts);
           bucket.shortCalls.push(shortCalls);
           bucket.shortPuts.push(shortPuts);
+          bucket.floor.push(floor);
+          bucket.avg.push(puts ? weighted / puts : 0);
           byDay.set(day.day, bucket);
         }
       });
@@ -239,6 +246,8 @@ export class RunsService {
             puts: median(bucket.puts),
             shortCalls: median(bucket.shortCalls),
             shortPuts: median(bucket.shortPuts),
+            floor: median(bucket.floor),
+            avg: median(bucket.avg),
           };
         }));
       });

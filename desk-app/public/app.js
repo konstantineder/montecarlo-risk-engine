@@ -66,17 +66,17 @@ function frame(width, height, left, right, top, bottom, xMin, xMax, yMin, yMax, 
   for (let i = 0; i < 5; i++) {
     const value = yMin + ((yMax - yMin) * i) / 4;
     const yy = top + (1 - i / 4) * (height - top - bottom);
-    grid += `<line x1="${left}" y1="${yy.toFixed(1)}" x2="${width - right}" y2="${yy.toFixed(1)}" stroke="#3a342b"/>`;
-    grid += `<text x="${left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${yLabel(value)}</text>`;
+    grid += `<line x1="${left}" y1="${yy.toFixed(1)}" x2="${width - right}" y2="${yy.toFixed(1)}" stroke="#eeeae4"/>`;
+    grid += `<text x="${left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="#8a837c" font-size="11" font-family="ui-monospace,monospace">${yLabel(value)}</text>`;
   }
   const ticks = 6;
   for (let i = 0; i < ticks; i++) {
     const day = xMin + ((xMax - xMin) * i) / (ticks - 1);
     const xx = left + (i / (ticks - 1)) * (width - left - right);
-    grid += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${height - bottom}" stroke="#2a261f"/>`;
-    grid += `<text x="${xx.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${Math.round(day)}</text>`;
+    grid += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${height - bottom}" stroke="#f3f0eb"/>`;
+    grid += `<text x="${xx.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="#8a837c" font-size="11" font-family="ui-monospace,monospace">${Math.round(day)}</text>`;
   }
-  grid += `<text x="${(left + width - right) / 2}" y="${height - 2}" text-anchor="middle" fill="#6f675c" font-size="10" font-family="ui-monospace,monospace">day</text>`;
+  grid += `<text x="${(left + width - right) / 2}" y="${height - 2}" text-anchor="middle" fill="#b0a89f" font-size="10" font-family="ui-monospace,monospace">day</text>`;
   return { grid, x: (day) => left + ((day - xMin) / (xMax - xMin || 1)) * (width - left - right), y: (v) => top + (1 - (v - yMin) / (yMax - yMin || 1)) * (height - top - bottom) };
 }
 
@@ -95,7 +95,7 @@ function bandChart(rows, lowKey, midKey, highKey, opts = {}) {
   const zero = opts.zero && y0 <= 0 && y1 >= 0
     ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
     : "";
-  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polygon points="${upper} ${lower}" fill="#e6d3a3" opacity="0.16"/><polyline points="${mid}" fill="none" stroke="#e6d3a3" stroke-width="1.8"/></svg>`;
+  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polygon points="${upper} ${lower}" fill="#5b4b8a" opacity="0.12"/><polyline points="${mid}" fill="none" stroke="#5b4b8a" stroke-width="1.8"/></svg>`;
 }
 
 function multiChart(rows, series, opts = {}) {
@@ -112,7 +112,7 @@ function multiChart(rows, series, opts = {}) {
   series.forEach((s, i) => {
     const x0 = left + i * 150;
     legend += `<line x1="${x0}" y1="12" x2="${x0 + 18}" y2="12" stroke="${s.color}" stroke-width="2"/>`;
-    legend += `<text x="${x0 + 24}" y="16" fill="#c8c0b4" font-size="11" font-family="ui-monospace,monospace">${s.label}</text>`;
+    legend += `<text x="${x0 + 24}" y="16" fill="#6b6560" font-size="11" font-family="ui-monospace,monospace">${s.label}</text>`;
   });
   const lines = series.map((s) => {
     const points = rows.map((r) => `${f.x(r.day).toFixed(1)},${f.y(r[s.key]).toFixed(1)}`).join(" ");
@@ -137,7 +137,7 @@ function chart(days, key, opts = {}) {
   const zero = opts.zero && low <= 0 && high >= 0
     ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
     : "";
-  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polyline points="${line}" fill="none" stroke="#e6d3a3" stroke-width="1.8"/>${dots}</svg>`;
+  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polyline points="${line}" fill="none" stroke="#5b4b8a" stroke-width="1.8"/>${dots}</svg>`;
 }
 
 function linesChart(days, series) {
@@ -179,6 +179,14 @@ function linesChart(days, series) {
   return `<svg viewBox="0 0 ${width} ${height}">${grid}${legend}${lines}</svg>`;
 }
 
+function putStrikes(day) {
+  const longs = (day.position || []).filter((row) => row.name === "put" && row.side === "long");
+  const qty = longs.reduce((n, row) => n + (Number(row.qty) || 0), 0);
+  const floor = longs.length ? Math.min(...longs.map((row) => Number(row.strike) || 0)) : 0;
+  const avg = qty ? longs.reduce((n, row) => n + (Number(row.strike) || 0) * (Number(row.qty) || 0), 0) / qty : 0;
+  return { floor, avg };
+}
+
 function bookCounts(day) {
   let shares = 0, puts = 0, shortCalls = 0, shortPuts = 0;
   (day.position || []).forEach((row) => {
@@ -199,7 +207,7 @@ function scatter(rows) {
   x0 -= sx * 0.06; x1 += sx * 0.06; y0 -= sy * 0.06; y1 += sy * 0.06;
   const f = frame(width, height, left, right, top, bottom, x0, x1, y0, y1, money);
   const dots = rows.map((r) =>
-    `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${f.x(r.ending_spot).toFixed(1)}" cy="${f.y(r.pnl).toFixed(1)}" r="4" fill="${r.pnl < 0 ? "#d07a62" : "#e6d3a3"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
+    `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${f.x(r.ending_spot).toFixed(1)}" cy="${f.y(r.pnl).toFixed(1)}" r="4" fill="${r.pnl < 0 ? "#a33b32" : "#5b4b8a"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
   ).join("");
   const zero = y0 <= 0 && y1 >= 0
     ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
@@ -227,7 +235,7 @@ function histogram(rows) {
     const x = left + i * bw;
     const y = height - bottom - h;
     const mid = low + ((i + 0.5) / bins) * span;
-    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${mid < 0 ? "#d07a62" : "#e6d3a3"}" opacity="0.85"><title>${money(mid)} · ${c} paths</title></rect>`;
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${mid < 0 ? "#a33b32" : "#5b4b8a"}" opacity="0.8"><title>${money(mid)} · ${c} paths</title></rect>`;
   });
   return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${bars}</svg>`;
 }
@@ -484,16 +492,26 @@ async function showRun(id) {
     );
   }
   if (series.length) {
-    grid.append(chartCard(
-      "Position, median path",
-      "Contracts. Shares are divided by 100 so they sit next to the puts.",
-      multiChart(series, [
-        { key: "shares", color: "#e6d3a3", label: "shares ÷ 100" },
-        { key: "puts", color: "#7d9a84", label: "long puts" },
-        { key: "shortCalls", color: "#c8b48a", label: "short calls" },
-        { key: "shortPuts", color: "#d07a62", label: "short puts" },
-      ]),
-    ));
+    grid.append(
+      chartCard(
+        "Position, median path",
+        "Contracts. Shares are divided by 100 so they sit next to the puts.",
+        multiChart(series, [
+          { key: "shares", color: "#5b4b8a", label: "shares ÷ 100" },
+          { key: "puts", color: "#3d6b4f", label: "long puts" },
+          { key: "shortCalls", color: "#8a6a2f", label: "short calls" },
+          { key: "shortPuts", color: "#a33b32", label: "short puts" },
+        ]),
+      ),
+      chartCard(
+        "Put strike",
+        "The floor is the lowest long put. The average is weighted by contracts. A step is a roll.",
+        multiChart(series, [
+          { key: "floor", color: "#3d6b4f", label: "floor strike" },
+          { key: "avg", color: "#5b4b8a", label: "average strike" },
+        ]),
+      ),
+    );
   }
   grid.append(
     chartCard("Where paths landed", "Horizontal is ending spot, vertical is P&L. Click a point.", scatter(paths)),
@@ -588,18 +606,23 @@ async function showPath(id, index) {
   ]));
   const charts = document.createElement("div");
   charts.className = "chart-grid";
-  const cover = days.map((d) => ({ day: d.day, ...bookCounts(d) }));
+  const cover = days.map((d) => ({ day: d.day, spot: d.price, ...bookCounts(d), ...putStrikes(d) }));
   charts.append(
     chartCard("Spot", "Left is the price. Dots are trade days.", chart(days, "price")),
     chartCard("P&L", "Dashed line is zero.", chart(days, "pnl", { zero: true, money: true })),
     chartCard("Mark to market", "Cash plus the marks on shares and options.", chart(days, "mtm", { money: true })),
     chartCard("Cover", "Shares ÷ 100 against the long puts. They should stay near each other.", multiChart(cover, [
-      { key: "shares", color: "#e6d3a3", label: "shares ÷ 100" },
-      { key: "puts", color: "#7d9a84", label: "long puts" },
+      { key: "shares", color: "#5b4b8a", label: "shares ÷ 100" },
+      { key: "puts", color: "#3d6b4f", label: "long puts" },
+    ])),
+    chartCard("Put strike", "Spot against the floor and the average long put. A step up is the roll.", multiChart(cover, [
+      { key: "spot", color: "#8a837c", label: "spot" },
+      { key: "floor", color: "#3d6b4f", label: "floor strike" },
+      { key: "avg", color: "#5b4b8a", label: "average strike" },
     ])),
     chartCard("Short options open", "Calls still sold, and puts sold to get the shares back.", multiChart(cover, [
-      { key: "shortCalls", color: "#e6d3a3", label: "short calls" },
-      { key: "shortPuts", color: "#d07a62", label: "short puts" },
+      { key: "shortCalls", color: "#8a6a2f", label: "short calls" },
+      { key: "shortPuts", color: "#a33b32", label: "short puts" },
     ])),
   );
   app.append(charts);
