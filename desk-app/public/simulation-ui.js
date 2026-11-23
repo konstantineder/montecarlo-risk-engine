@@ -54,12 +54,16 @@ async function simulationForm(saveOnly = false) {
   form.innerHTML = `
     ${field("lots", "Lots")}${field("horizon", "Horizon days")}${field("paths", "Paths per configuration")}${field("seed", "Seed")}
     ${field("spot", "Spot")}${field("iv", "Opening IV")}
-    <label>Strategy<select name="strategy"><option value="wheel">wheel</option><option value="hold">hold</option></select></label>
+    <label>Strategy<select name="strategy"><option value="wheel">wheel</option><option value="hold">hold opening book</option><option value="stock">stock only</option></select></label>
     ${field("contracts", "Contracts 1w,2w,3w,4w")}
     ${field("puts", "Put sleeves percent:dte:roll", true)}${field("otm", "Call OTM 1w,2w,3w,4w", true)}
     <details class="advanced full"><summary>Advanced configuration &amp; parameter ranges</summary>
       <p class="note">Set model and rule values here. Decimals are fractions: 0.2 means 20%. Rule switches are on the Rules tab. The put sleeves determine the actual hedge DTEs.</p>
       <h3>Model settings</h3><div class="settings-grid">${schema.scalars.filter((p) => p.group === "Model").map((p) => field(p.key, p.label)).join("")}</div>
+      <h3>Dynamic call rules</h3>
+      <label>Call policy<select name="callPolicy"><option value="fixed">Fixed OTM ladder</option><option value="adaptive">Adapt to IV, trend and drawdown</option></select></label>
+      <p class="note">Adaptive OTM = base OTM × (current IV / initial IV)^IV sensitivity + trend sensitivity × trailing return + drawdown sensitivity × drawdown from the price peak. Bounds cap the result. Decisions use current and past observations only.</p>
+      <div class="settings-grid">${schema.scalars.filter((p) => p.group === "Dynamic").map((p) => field(p.key, p.label)).join("")}</div>
       <h3>Rule settings</h3><div class="settings-grid">${schema.scalars.filter((p) => p.group === "Rules").map((p) => field(p.key, p.label)).join("")}${field("putRatioGrid", "Put ratio grid: drop percent:ratio", true)}</div>
       <label class="check"><input type="checkbox" id="enable-ranges"/>Run a parameter sweep</label>
       <div class="range-editor" hidden>
@@ -75,6 +79,7 @@ async function simulationForm(saveOnly = false) {
     <div class="launch-summary full" role="status"></div>
     <button class="run" type="submit" disabled>${saveOnly ? "Save configuration" : "Run simulation"}</button>`;
   form.elements.strategy.value = cfg.strategy;
+  form.elements.callPolicy.value = cfg.callPolicy || "fixed";
   form.elements.sweepMode.value = cfg.sweepModeVersion === 2 && cfg.sweepMode === "separate" ? "separate" : "combined";
   const advanced = form.querySelector("details");
   const enabled = form.querySelector("#enable-ranges");
@@ -163,6 +168,19 @@ async function simulationForm(saveOnly = false) {
   });
   drawRanges();
   wrap.append(form, status);
+  get("/api/configurations").then((entries) => {
+    if (!entries.length || !wrap.isConnected) return;
+    const library = document.createElement("div"); library.className = "exports";
+    const select = document.createElement("select"); select.setAttribute("aria-label", "Saved optimized configuration");
+    select.innerHTML = '<option value="">Load a saved strategy…</option>' + entries.map((entry, index) => `<option value="${index}">${escapeHtml(entry.name)}</option>`).join("");
+    select.addEventListener("change", () => {
+      if (!select.value) return;
+      const entry = entries[Number(select.value)];
+      const settings = Object.fromEntries(entry.strategyKeys.map((key) => [key, entry.config[key]]));
+      saveConfig({ ...savedConfig(), ...settings, sweepEnabled: false }); navigate();
+    });
+    library.append(select); wrap.prepend(library);
+  }).catch(() => {});
   setTimeout(schedulePreview, 0);
   return wrap;
 }
@@ -189,7 +207,7 @@ async function watchJobs(host, includeCompleted = false) {
       const expanded = new Set([...host.querySelectorAll("details[open]")].map((d) => d.dataset.job));
       const groups = new Map();
       for (const job of jobs) {
-        if (job.status === "queued" || job.status === "running") seen.add(job.batch);
+        if (["queued", "running", "pausing", "paused"].includes(job.status)) seen.add(job.batch);
         if (!groups.has(job.batch)) groups.set(job.batch, []);
         groups.get(job.batch).push(job);
       }
@@ -242,12 +260,12 @@ async function watchJobs(host, includeCompleted = false) {
           card.className = `sim job ${job.status}`;
           card.dataset.job = job.id;
           const title = document.createElement("h3");
-          title.textContent = job.mode === "combined" ? `Combined simulation · ${job.configurationCount} configurations` : group.length === 1 ? `${job.config.strategy} simulation` : `Simulation ${job.index} of ${job.batchSize}`;
+          title.textContent = job.kind === "optimization" ? `Optimizer · path ${job.payload?.path}` : job.kind === "replay" ? "Strategy replay" : job.mode === "combined" ? `Combined simulation · ${job.configurationCount} configurations` : group.length === 1 ? `${job.config.strategy} simulation` : `Simulation ${job.index} of ${job.batchSize}`;
           const progress = document.createElement("strong");
-          progress.textContent = job.status === "queued" ? "Queued · 0%" : `${job.progress.toFixed(1)}%${job.status === "done" ? " · Completed" : job.status === "error" ? " · Failed" : ""}`;
+          progress.textContent = job.status === "queued" ? "Queued · 0%" : `${job.progress.toFixed(1)}%${job.status === "done" ? " · Completed" : job.status === "error" ? " · Failed" : job.status === "paused" ? " · Paused" : job.status === "pausing" ? " · Pausing" : ""}`;
           const phase = document.createElement("p");
           phase.className = "meta";
-          phase.textContent = `${job.phase} · ${job.completedPaths}/${job.totalPaths} paths`;
+          phase.textContent = `${job.phase} · ${job.completedPaths}/${job.totalPaths} ${job.kind === "optimization" ? "candidates" : "paths"}`;
           const config = document.createElement("p");
           config.className = "meta";
           config.textContent = job.mode === "combined" ? `${job.configurationCount} configurations · ${job.totalPaths} total paths · settings below` : `${job.config.lots} lots · ${job.config.horizon} days · seed ${job.config.seed}`;
@@ -258,6 +276,17 @@ async function watchJobs(host, includeCompleted = false) {
             const labels = rangeParameters(schemaData || { scalars: [] }, job.config);
             choices.textContent = Object.entries(job.variations).map(([key, value]) => `${labels.find((p) => p.key === key)?.label || key}: ${value}`).join(" · ");
             card.append(choices);
+          }
+          if (job.status === "done" && job.optimization) {
+            const link = document.createElement("a"); link.className = "ghost"; link.href = `#/optimizer/${job.optimization}`; link.textContent = "Open optimization"; card.append(link);
+          }
+          if (["queued", "running", "pausing", "paused", "error"].includes(job.status)) {
+            const control = document.createElement("button"); control.className = "ghost job-control";
+            const resume = job.status === "paused" || job.status === "error";
+            control.textContent = resume ? "Resume from checkpoint" : job.status === "pausing" ? "Finishing current path…" : "Pause";
+            control.disabled = job.status === "pausing";
+            control.addEventListener("click", async () => { control.disabled = true; try { await postJson(`/api/jobs/${job.id}/${resume ? "resume" : "pause"}`, {}); await refresh(); } catch (error) { control.textContent = error.message; control.disabled = false; } });
+            card.append(control);
           }
           if (job.status === "done" && job.run) {
             const link = document.createElement("a");
@@ -330,7 +359,7 @@ async function showActive() {
   await watchJobs(host, true);
 }
 
-function combinedConfigurations(run) {
+function combinedConfigurations(run, paths = []) {
   const section = document.createElement("section");
   const heading = document.createElement("h2");
   heading.textContent = "Configurations in this simulation";
@@ -338,10 +367,7 @@ function combinedConfigurations(run) {
   note.className = "note";
   note.textContent = run.note;
   const groups = run.configurations || [];
-  section.append(heading, note, table(
-    ["Configuration", "Paths", "Lots", "Horizon", "Call OTM 1w–4w", "Median P&L", "Loss"],
-    groups.map((g) => [String(g.id), String(g.config.paths), String(g.config.lots), `${g.config.horizon_days}d`, g.config.tenors.map((t) => t.otm).join(", "), money(g.monte_carlo.median), pct(g.monte_carlo.prob_loss)])
-  ));
+  section.append(heading, note, configurationComparison(run, paths));
   groups.forEach((group) => {
     const details = document.createElement("details");
     const summary = document.createElement("summary");

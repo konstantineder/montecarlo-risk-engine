@@ -4,7 +4,7 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { JSDOM } = require('jsdom');
 const { runInContext } = require('node:vm');
-const { DEFAULTS, SCALARS, MAX_SIMULATIONS, planSimulations } = require('../dist/desk/simulation-plan');
+const { DEFAULTS, SCALARS, MAX_SIMULATIONS, planSimulations, parametersFor } = require('../dist/desk/simulation-plan');
 
 async function waitFor(check) {
   const end = Date.now() + 2000;
@@ -26,6 +26,13 @@ function setup(t, options = {}) {
     try {
       if (url === '/api/simulation/config') value = { defaults: DEFAULTS, scalars: SCALARS, maxSimulations: MAX_SIMULATIONS };
       else if (url === '/api/simulation/preview') value = planSimulations(JSON.parse(init.body));
+      else if (url === '/api/optimizer/context/source/0') value = {sourceRun:'source',path:0,base:DEFAULTS,originalPnl:-100,stockHold:100,rules:['harvest','write_calls'],strategyKeys:['otm','callPolicy'],parameters:parametersFor(DEFAULTS).filter(p=>p.key.startsWith('otm.'))};
+      else if (url === '/api/optimizer/source/0/preview') value={candidates:3};
+      else if (url === '/api/optimizer/source/0/start') {server.optimization=JSON.parse(init.body);value={job:'search'};}
+      else if (url === '/api/optimizations/search') value=options.optimization;
+      else if (url === '/api/optimizations/search/save') {server.saved=JSON.parse(init.body);value={name:server.saved.name};}
+      else if (url === '/api/optimizations/search/replay') {server.replayed=JSON.parse(init.body);value={job:'replay'};}
+      else if (url === '/api/jobs/paused/resume') {server.jobs[0].status='running';value=server.jobs[0];}
       else if (url === '/api/rules') value = [{ name: 'harvest', says: 'Harvest short calls', drop: 0.08, keep: 0.5 }];
       else if (url === '/api/runs/combined') value = options.run;
       else if (url === '/api/runs/combined/paths') value = options.paths;
@@ -48,7 +55,7 @@ function setup(t, options = {}) {
     return { ok: status < 400, status, json: async () => value, text: async () => JSON.stringify(value) };
   };
   if (options.config) dom.window.localStorage.setItem('desk-config', JSON.stringify(options.config));
-  for (const file of ['simulation-ui.js', 'app.js']) runInContext(readFileSync(join(__dirname, '../public', file), 'utf8'), dom.getInternalVMContext());
+  for (const file of ['simulation-ui.js', 'optimizer-ui.js', 'app.js']) runInContext(readFileSync(join(__dirname, '../public', file), 'utf8'), dom.getInternalVMContext());
   const document = dom.window.document;
   const input = (element, value) => { element.value = value; element.dispatchEvent(new dom.window.Event('input', { bubbles: true })); };
   return { dom, document, server, input };
@@ -203,4 +210,40 @@ test('completed separate batch offers one combined result without starting a new
   await host.refresh();
   const link=[...document.querySelectorAll('a')].find(link=>link.textContent==='Open combined results');
   assert.equal(link.getAttribute('href'),'#/run/combined-result');
+});
+
+
+test('optimizer exposes stock-hold scoring and starts a bounded same-path search',async t=>{
+ const {document,dom,server}=setup(t,{hash:'#/optimize/source/0'});
+ await waitFor(()=>document.querySelector('.optimizer-form button.run:not(:disabled)'));
+ assert.equal(document.querySelector('[name="objective"]').value,'excess_hold');
+ assert.match(document.querySelector('.launch-summary').textContent,/3 strategy candidates/);
+ document.querySelector('form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
+ await waitFor(()=>server.optimization);
+ assert.equal(server.optimization.objective,'excess_hold');assert.ok(server.optimization.policies.includes('adaptive'));
+});
+
+test('optimizer results save a learned policy and apply it to the whole simulation',async t=>{
+ const c={id:'candidate-1',baseline:false,config:{...DEFAULTS,callPolicy:'adaptive'},pnl:200,excess_hold:100,improvement:300,max_dd:20};
+ const result={source_run:'source',training_path:0,objective:'excess_hold',baseline:{replayed_pnl:-100,stock_hold:{pnl:100}},candidates:[c],winning_candidate:c.id,price_precision:'Full saved prices',note:'Fitted path only',plot:[{day:0,original:0,optimized:0,stock_hold:0},{day:1,original:-100,optimized:200,stock_hold:100}]};
+ const {document,server}=setup(t,{hash:'#/optimizer/search',optimization:result});
+ await waitFor(()=>document.querySelector('.save-candidate'));
+ document.querySelector('.save-candidate').click();await waitFor(()=>document.querySelector('.status')?.textContent.startsWith('Saved'));
+ assert.equal(server.saved.candidate,'candidate-1');
+ document.querySelector('.replay-run').click();await waitFor(()=>server.replayed);assert.equal(server.replayed.scope,'run');
+});
+
+test('configuration rankings distinguish excess stock-hold P&L from raw median P&L',async t=>{
+ const {document,dom}=setup(t);await waitFor(()=>document.querySelector('button.run:not(:disabled)'));
+ const run={configurations:[{id:1,config:{lots:100,spot:59.22,paths:1,tenors:[],put_sleeves:[]},book:{deployed:600000},monte_carlo:{mean:10000,median:10000,p05:10000,prob_loss:0,median_drawdown:1}},{id:2,config:{lots:100,spot:59.22,paths:1,tenors:[],put_sleeves:[]},book:{deployed:600000},monte_carlo:{mean:5000,median:5000,p05:5000,prob_loss:0,median_drawdown:1}}]};
+ const panel=dom.window.configurationComparison(run,[{configuration:1,ending_spot:80},{configuration:2,ending_spot:60}]);document.getElementById('app').append(panel);
+ assert.equal(panel.querySelectorAll('tbody td')[1].textContent,'2');
+ const select=panel.querySelector('select');select.value='median';select.dispatchEvent(new dom.window.Event('change'));assert.equal(panel.querySelectorAll('tbody td')[1].textContent,'1');
+});
+
+test('paused jobs expose Resume and continue with their checkpoint progress',async t=>{
+ const job={id:'paused',batch:'paused-batch',index:1,batchSize:1,mode:'separate',config:DEFAULTS,variations:{},status:'paused',phase:'Paused',progress:40,completedPaths:2,totalPaths:5};
+ const {document,server}=setup(t,{hash:'#/active',jobs:[job]});await waitFor(()=>document.querySelector('.job-control'));
+ assert.equal(document.querySelector('.job-control').textContent,'Resume from checkpoint');
+ document.querySelector('.job-control').click();await waitFor(()=>server.jobs[0].status==='running');
 });

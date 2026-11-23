@@ -93,6 +93,13 @@ class BookConfig:
     seed: int = 13
     strategy: str = "wheel"
     rules: tuple[str, ...] = ()
+    call_policy: str = "fixed"
+    call_vol_sensitivity: float = 1.0
+    call_trend_sensitivity: float = 0.5
+    call_drawdown_sensitivity: float = 0.5
+    call_otm_min: float = 0.01
+    call_otm_max: float = 0.50
+    call_lookback: int = 20
     slippage: float = 0.05
     lambda_j: float = 0.7
     mu_j: float = -0.07
@@ -214,10 +221,15 @@ def build_book(cfg: BookConfig) -> dict:
                 continue
             puts.append((part, sleeve.dte, strike, f"{name}-{sleeve.tag}", sleeve.dte, sleeve.roll_at))
     weekly = []
+    from tqqq_book.policy import CallPolicy
+    policy = CallPolicy.from_config(cfg)
     for tenor in cfg.tenors:
-        strike = float(max(1, round(cfg.spot * (1.0 + tenor.otm))))
-        weekly.append((_qty(tenor.contracts, cfg.lots), tenor.days, strike, tenor.tag, tenor.otm))
+        opening_otm = policy.otm(tenor.otm, cfg.iv, cfg.iv)
+        strike = float(max(1, round(cfg.spot * (1.0 + opening_otm))))
+        weekly.append((_qty(tenor.contracts, cfg.lots), tenor.days, strike, tenor.tag, opening_otm))
 
+    if cfg.strategy == "stock":
+        puts = []; weekly = []
     legs: list[Leg] = []
     put_premium = 0.0
     call_premium = 0.0
@@ -294,7 +306,7 @@ def _mark(leg: Leg, spot: float, t: int, rate: float, sigma: float) -> float:
     return _fast_price(spot, leg.strike, max(0, leg.expiry - t) * DT, rate, sigma, leg.kind)
 
 
-def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
+def _simulate(path: np.ndarray, book: dict, cfg: BookConfig, *, record_history: bool = True) -> dict:
     legs = [Leg(**{k: getattr(leg, k) for k in Leg.__dataclass_fields__}) for leg in book["legs"]]
     cash = book["cash"]
     shares = book["shares"]
@@ -313,6 +325,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
     days: list[dict] = []
     day_trades: list[dict] = []
     strategy = cfg.strategy
+    market_peak = float(path[0])
 
     def settle(t: int, spot: float) -> None:
         nonlocal cash, shares, assignments
@@ -417,6 +430,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                 "expiry": order.expiry,
                 "premium": round(credit, 4),
                 "tag": order.tag,
+                "reason": order.reason,
             })
             return
         if order.action == "sell_put":
@@ -546,14 +560,18 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
         steps: list[dict] = []
         rule_log: list[dict] = []
         min_spot = min(min_spot, spot)
+        market_peak = max(market_peak, spot)
         sigma = _iv_at(spot, cfg.spot, cfg.iv, cfg.iv_elasticity)
-        before = snap(spot, t, sigma)
+        before = snap(spot, t, sigma) if record_history else []
         settle(t, spot)
-        if day_trades:
+        if day_trades and record_history:
             steps.append({"rule": "settle", "trades": list(day_trades), "before": before, "after": snap(spot, t, sigma)})
         if t < last and rules:
             position = Position(
                 day=t,
+                trend=spot / float(path[max(0, t - cfg.call_lookback)]) - 1.0,
+                drawdown=1.0 - spot / market_peak,
+                initial_iv=cfg.iv,
                 last=last,
                 spot=spot,
                 spot0=cfg.spot,
@@ -568,13 +586,14 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
                 ),
             )
             for rule in rules:
-                before = snap(spot, t, sigma)
+                before = snap(spot, t, sigma) if record_history else []
                 start = len(day_trades)
                 for order in rule.apply(position):
                     execute(order)
                 acted = len(day_trades) > start
-                rule_log.append({"name": rule.name, "acted": acted})
-                if acted:
+                if record_history:
+                    rule_log.append({"name": rule.name, "acted": acted})
+                if acted and record_history:
                     steps.append({
                         "rule": rule.name,
                         "trades": day_trades[start:],
@@ -602,7 +621,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig) -> dict:
             "iv": round(sigma, 4),
             "shares": shares,
             "trades": day_trades,
-            "position": snap(spot, t, sigma),
+            "position": snap(spot, t, sigma) if record_history else [],
             "steps": steps,
             "rules": rule_log,
         })
@@ -724,7 +743,7 @@ def _vol_view(cfg: BookConfig) -> dict:
     }
 
 
-def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None = None, *, persist: bool = True) -> dict:
+def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None = None, *, persist: bool = True, checkpoint_dir: Path | None = None) -> dict:
     cfg = cfg or BookConfig()
     if cfg.paths < 1 or cfg.horizon_days < 1:
         raise ValueError("paths and horizon days must be at least 1")
@@ -733,6 +752,8 @@ def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None =
         if progress:
             progress({"phase": phase, "percent": round(percent, 2), "completed": completed, "total": cfg.paths, **extra})
 
+    from tqqq_book.checkpoint import PathCheckpoint, root as checkpoint_root
+    checkpoint = PathCheckpoint(checkpoint_dir or checkpoint_root(), asdict(cfg))
     notify("Building opening book", 0)
     path_days = cfg.horizon_days
     book = build_book(cfg)
@@ -743,13 +764,20 @@ def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None =
     trade_counts = np.zeros((cfg.paths, path_days + 1), dtype=int)
     paths = []
     for i in range(cfg.paths):
-        stats = _simulate(spots[i], book, cfg)
-        navs[i] = stats["nav"]
-        days = stats.pop("days")
-        stats.pop("nav")
+        cached = checkpoint.load(i)
+        if cached is None:
+            stats = _simulate(spots[i], book, cfg)
+            days = stats.pop("days")
+            nav = stats.pop("nav")
+            cached = {"path": i, **stats, "days": days, "prices": spots[i].tolist(), "nav_values": nav}
+            checkpoint.save(i, cached)
+        else:
+            days = cached["days"]
+            nav = cached.get("nav_values", [day["pnl"] for day in days])
+        navs[i] = nav
         trade_counts[i] = [len(day["trades"]) for day in days]
-        paths.append({"path": i, **stats, "days": days})
-        rows.append(stats)
+        paths.append(cached)
+        rows.append({key: value for key, value in cached.items() if key not in ("days", "prices", "config", "nav_values")})
         notify("Simulating paths", 5 + 85 * (i + 1) / cfg.paths, i + 1)
     notify("Calculating summary", 92, cfg.paths)
     call_lines = [
@@ -931,6 +959,13 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
         qqq_mu=float(pick("qqqMu", "qqq_mu", "drift", default=base.qqq_mu)),
         tqqq_vol=float(pick("tqqqVol", "tqqq_vol", "vol", default=base.tqqq_vol)),
         iv=float(pick("iv", default=base.iv)),
+        call_policy=str(pick("callPolicy", "call_policy", default=base.call_policy)),
+        call_vol_sensitivity=float(pick("callVolSensitivity", "call_vol_sensitivity", default=base.call_vol_sensitivity)),
+        call_trend_sensitivity=float(pick("callTrendSensitivity", "call_trend_sensitivity", default=base.call_trend_sensitivity)),
+        call_drawdown_sensitivity=float(pick("callDrawdownSensitivity", "call_drawdown_sensitivity", default=base.call_drawdown_sensitivity)),
+        call_otm_min=float(pick("callOtmMin", "call_otm_min", default=base.call_otm_min)),
+        call_otm_max=float(pick("callOtmMax", "call_otm_max", default=base.call_otm_max)),
+        call_lookback=int(pick("callLookback", "call_lookback", default=base.call_lookback)),
         iv_elasticity=float(pick("ivElasticity", "iv_elasticity", default=base.iv_elasticity)),
         slippage=float(pick("slippage", default=base.slippage)),
         lambda_j=float(pick("lambdaJ", "lambda_j", default=base.lambda_j)),
@@ -984,11 +1019,18 @@ def main() -> None:
     parser.add_argument("--lambda-j", type=float, default=0.7)
     parser.add_argument("--mu-j", type=float, default=-0.07)
     parser.add_argument("--sigma-j", type=float, default=0.05)
+    parser.add_argument("--call-policy", choices=("fixed", "adaptive"), default="fixed")
+    parser.add_argument("--call-vol-sensitivity", type=float, default=1.0)
+    parser.add_argument("--call-trend-sensitivity", type=float, default=0.5)
+    parser.add_argument("--call-drawdown-sensitivity", type=float, default=0.5)
+    parser.add_argument("--call-otm-min", type=float, default=0.01)
+    parser.add_argument("--call-otm-max", type=float, default=0.50)
+    parser.add_argument("--call-lookback", type=int, default=20)
     parser.add_argument("--vol", type=float, default=0.66)
     parser.add_argument("--drift", type=float, default=0.12)
     parser.add_argument("--paths", type=int, default=400)
     parser.add_argument("--seed", type=int, default=13)
-    parser.add_argument("--strategy", default="wheel", choices=("wheel", "hold"))
+    parser.add_argument("--strategy", default="wheel", choices=("wheel", "hold", "stock"))
     parser.add_argument("--rules", default="", help="Comma separated rule names to leave on. Empty means all on.")
     parser.add_argument("--harvest-drop", type=float, default=0.08)
     parser.add_argument("--harvest-keep", type=float, default=0.5)

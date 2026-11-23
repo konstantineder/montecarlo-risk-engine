@@ -26,35 +26,62 @@ class _CombinedPaths:
     def __init__(self, folder: Path, total: int, max_days: int):
         self.total = total
         self.max_days = max_days
-        self.source = folder / "paths.jsonl"
-        self.handle = self.source.open("w")
+        from tqqq_book.checkpoint import root
+        checkpoint = root()
+        self.source = (checkpoint / "combined.paths.jsonl") if checkpoint else folder / "paths.jsonl"
+        self.source.parent.mkdir(parents=True, exist_ok=True)
+        self.keys = set()
+        self.handle = None
         self.rows = []
         self.spots = np.full((total, max_days + 1), np.nan)
         self.pnls = np.full_like(self.spots, np.nan)
         self.mtms = np.full_like(self.spots, np.nan)
         self.trades = np.zeros_like(self.spots, dtype=int)
+        # Recover complete JSONL records and discard an interrupted final write.
+        if checkpoint and self.source.exists():
+            with self.source.open("rb+") as handle:
+                valid = 0
+                while line := handle.readline():
+                    from tqqq_book.checkpoint import check_pause
+                    check_pause()
+                    try:
+                        row = json.loads(line)
+                    except (ValueError, UnicodeDecodeError):
+                        handle.truncate(valid)
+                        break
+                    self._remember(row)
+                    valid = handle.tell()
+        self.handle = self.source.open("a" if checkpoint else "w")
 
-    def add(self, path: dict, group: dict, local: int):
+    def _remember(self, row):
         index = len(self.rows)
-        if index >= self.total:
-            raise ValueError("Saved path count exceeds its configuration's declared paths.")
-        days = path["days"]
-        if not days or len(days) > self.max_days + 1:
-            raise ValueError("Saved path horizon does not match its configuration.")
-        row = {**path, "path": index, "configuration": group["id"], "configuration_path": local, "config": group["config"]}
-        if "source_run" in group:
-            row.update(source_run=group["source_run"], source_path=path["path"])
-        self.handle.write(json.dumps(row) + "\n")
-        self.rows.append({key: value for key, value in row.items() if key not in ("days", "config")})
+        days = row["days"]
+        if index >= self.total or not days or len(days) > self.max_days + 1:
+            raise ValueError("Checkpoint path count or horizon does not match its configuration")
+        self.keys.add((row["configuration"], row["configuration_path"]))
+        self.rows.append({key: value for key, value in row.items() if key not in ("days", "config", "prices", "nav_values")})
         self.spots[index, :len(days)] = [day["price"] for day in days]
         self.pnls[index, :len(days)] = [day["pnl"] for day in days]
         self.mtms[index, :len(days)] = [day["mtm"] for day in days]
         self.trades[index, :len(days)] = [len(day["trades"]) for day in days]
 
-    def close(self):
-        self.handle.close()
+    def add(self, path: dict, group: dict, local: int):
+        from tqqq_book.checkpoint import check_pause
+        check_pause()
+        if (group["id"], local) in self.keys:
+            return
+        row = {**path, "path": len(self.rows), "configuration": group["id"], "configuration_path": local, "config": path.get("config", group["config"])}
+        if "source_run" in group:
+            row.update(source_run=group["source_run"], source_path=path["path"])
+        self.handle.write(json.dumps(row) + "\n")
+        self.handle.flush()
+        self._remember(row)
 
-    def save(self, groups: list[dict], progress=None) -> dict:
+    def close(self):
+        if self.handle:
+            self.handle.close()
+
+    def save(self, groups: list[dict], progress=None, analysis: dict | None = None) -> dict:
         self.close()
         if len(self.rows) != self.total:
             raise ValueError("Saved path count does not match the declared number of paths.")
@@ -93,6 +120,8 @@ class _CombinedPaths:
             "vol": {"note": "Volatility and IV settings are stored separately for each configuration."},
             "rules": [], "ribbon": ribbon, "median_path": _median_path([median]),
         }
+        if analysis:
+            combined["analysis"] = analysis
         from tqqq_book.report import write_report
         from tqqq_book.store import save_run
         notify("Saving combined paths", 94)
@@ -120,13 +149,15 @@ def run_combined(configurations: list[dict], progress: Callable[[dict], None] | 
         groups = []
         try:
             for index, cfg in enumerate(configs, 1):
-                offset = len(writer.rows)
+                offset = sum(item.paths for item in configs[:index-1])
 
                 def forward(event):
                     percent = 90 * (offset + cfg.paths * event["percent"] / 100) / total
-                    _notify(progress, total, f"Configuration {index}/{len(configs)} · {event['phase']}", percent, offset + event["completed"])
+                    _notify(progress, total, f"Configuration {index}/{len(configs)} · {event['phase']}", max(percent, 90 * len(writer.rows) / total), max(len(writer.rows), offset + event["completed"]))
 
-                result = run(cfg, progress=forward, persist=False)
+                from tqqq_book.checkpoint import root
+                checkpoint = root()
+                result = run(cfg, progress=forward, persist=False, checkpoint_dir=checkpoint / f"configuration-{index}" if checkpoint else None)
                 group = {"id": index, **{key: result[key] for key in ("config", "book", "monte_carlo", "vol", "rules")}}
                 groups.append(group)
                 for local, path in enumerate(result["_paths"]):
@@ -190,4 +221,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from tqqq_book.checkpoint import guarded
+    guarded(main)

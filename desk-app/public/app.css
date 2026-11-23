@@ -151,6 +151,17 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 99px; }
 .job.running { border-color: #b9acd8; }
 .job.done { border-color: #b9d3c1; }
 .job.error { border-color: #dfb1ac; }
+.job.paused { border-color: #d7c18a; }
+.job.pausing { border-color: #b9acd8; }
+.job .job-control { display: inline-block; margin: 8px 6px 8px 0; }
+.optimizer-actions { display: grid; gap: 12px; margin: 18px 0; }
+.optimizer-actions label { display: flex; flex-direction: column; gap: 6px; max-width: 680px; }
+.optimizer-actions input, .optimizer-actions select, .ranking select { padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); max-width: 100%; }
+.rule-toggles { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.rule-toggles legend { color: var(--muted); }
+.ranking > label { display: block; margin: 14px 0 10px; color: var(--muted); }
+.ranking td:nth-child(3) { white-space: normal; min-width: 200px; max-width: 380px; }
+.ranking tbody tr:first-child { background: #f3eef8; }
 .job p { margin: 8px 0; }
 .job .variation { font: 12px/1.5 ui-monospace, monospace; color: var(--accent); overflow-wrap: anywhere; }
 .job a.ghost { display: inline-block; margin: 8px 0; }

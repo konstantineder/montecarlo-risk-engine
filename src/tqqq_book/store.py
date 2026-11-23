@@ -14,12 +14,20 @@ RUNS = Path(os.environ.get("RUNS_DIR") or Path(__file__).resolve().parents[2] / 
 
 def save_run(result: dict, paths: Iterable[dict] | Path) -> dict:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    folder = RUNS / f"{stamp}-s{result['config']['seed']}"
-    extra = 2
-    while folder.exists():
-        folder = RUNS / f"{stamp}-s{result['config']['seed']}-{extra}"
-        extra += 1
-    folder.mkdir(parents=True)
+    from tqqq_book.checkpoint import root, atomic_json
+    checkpoint = root()
+    pointer = checkpoint / "output.json" if checkpoint else None
+    if pointer and pointer.exists():
+        folder = RUNS / json.loads(pointer.read_text())["id"]
+    else:
+        folder = RUNS / f"{stamp}-s{result['config']['seed']}"
+        extra = 2
+        while folder.exists():
+            folder = RUNS / f"{stamp}-s{result['config']['seed']}-{extra}"
+            extra += 1
+        if pointer:
+            atomic_json(pointer, {"id": folder.name})
+    folder.mkdir(parents=True, exist_ok=True)
     paths_file = folder / "paths.jsonl"
     if isinstance(paths, Path):
         shutil.copyfile(paths, paths_file)
@@ -32,6 +40,7 @@ def save_run(result: dict, paths: Iterable[dict] | Path) -> dict:
         "created": stamp,
         "note": result["note"],
         "config": result["config"],
+        **({"analysis": result["analysis"]} if "analysis" in result else {}),
         **({"configurations": result["configurations"]} if "configurations" in result else {}),
         "book": result["book"],
         "monte_carlo": result["monte_carlo"],
@@ -54,8 +63,11 @@ def save_run(result: dict, paths: Iterable[dict] | Path) -> dict:
         "dir": str(folder),
     }
     RUNS.mkdir(parents=True, exist_ok=True)
-    with (RUNS / "index.jsonl").open("a") as handle:
-        handle.write(json.dumps(listed) + "\n")
+    index = RUNS / "index.jsonl"
+    known = {json.loads(line)["id"] for line in index.read_text().splitlines() if line.strip()} if index.exists() else set()
+    if folder.name not in known:
+        with index.open("a") as handle:
+            handle.write(json.dumps(listed) + "\n")
     (RUNS / "latest.json").write_text(json.dumps(listed))
     return {
         "id": folder.name,

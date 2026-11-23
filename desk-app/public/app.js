@@ -283,6 +283,8 @@ async function route() {
   if (parts[0] === "config") return showConfig();
   if (parts[0] === "active") return showActive();
   if (parts[0] === "saved") return showHome(true);
+  if (parts[0] === "optimize") return showOptimizerForm(parts[1], Number(parts[2]));
+  if (parts[0] === "optimizer") return showOptimizerResult(parts[1]);
   if (parts[0] === "run" && parts[2] === "path") return showPath(parts[1], Number(parts[3]));
   if (parts[0] === "run") return showRun(parts[1]);
   return showHome();
@@ -480,6 +482,14 @@ async function showRun(id) {
   lede.className = "lede";
   lede.textContent = combined ? `${when(run.created)} · ${mc.paths} pooled paths · horizons ${cfg.horizon_range.join("–")}d. One P&L distribution across all configurations. Each path retains its own settings.` : `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d. Maximize any chart. Click a point or a row for the path.`;
   app.append(h, lede, exportBar(id));
+  const optimizeLink = document.createElement("a"); optimizeLink.className = "ghost";
+  const excessHold = (path) => {
+    const own = run.configurations?.find(g => g.id === path.configuration)?.config || cfg;
+    return path.pnl - (path.ending_spot - own.spot) * own.lots * 100;
+  };
+  const worst = paths.reduce((a,b) => excessHold(a) < excessHold(b) ? a : b, paths[0]);
+  optimizeLink.href = `#/optimize/${id}/${worst?.path ?? 0}`; optimizeLink.textContent = "Optimize weakest path versus stock"; app.append(optimizeLink);
+  if (run.analysis) app.append(replayComparison(run.analysis));
   app.append(facts([
     ["Median P&L", money(mc.median)],
     ["Mean", money(mc.mean)],
@@ -512,7 +522,7 @@ async function showRun(id) {
       reread.disabled = false;
     }
   });
-  if (combined) app.append(combinedConfigurations(run), reread, status);
+  if (combined) app.append(combinedConfigurations(run, paths), reread, status);
   else app.append(rulesTitle, rulesNote, ruleSnapshot(run.rules), reread, status);
 
   const grid = document.createElement("div");
@@ -647,6 +657,11 @@ async function showPath(id, index) {
     ["New calls", String(row.new_calls)],
     ["Roll cash", money(row.roll_cash)],
   ]));
+  const optimizeLink = document.createElement("a"); optimizeLink.className = "ghost"; optimizeLink.href = `#/optimize/${id}/${index}`; optimizeLink.textContent = "Optimize this path";
+  app.append(optimizeLink);
+  const initialShares = (row.config?.lots || 0) * 100 || days[0]?.position?.find((leg) => leg.name === "share")?.qty || 0;
+  const holdPnl = initialShares * (days[days.length - 1].price - days[0].price);
+  app.append(facts([["Stock-only P&L", money(holdPnl)], ["P&L above holding stock", money(row.pnl - holdPnl)]]));
   const charts = document.createElement("div");
   charts.className = "chart-grid";
   const cover = days.map((d) => ({ day: d.day, spot: d.price, ...bookCounts(d), ...putStrikes(d) }));

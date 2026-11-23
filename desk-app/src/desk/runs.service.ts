@@ -3,8 +3,9 @@ import { spawn, spawnSync } from "child_process";
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { createInterface } from "readline";
 import { join, resolve } from "path";
-import { DEFAULTS, MAX_SIMULATIONS, planSimulations, SCALARS } from "./simulation-plan";
+import { DEFAULTS, MAX_SIMULATIONS, planSimulations, SCALARS, configurationInput } from "./simulation-plan";
 import { SimulationQueue } from "./simulation-queue";
+import { OptimizationService } from "./optimization-service";
 
 export interface RunCard {
   id: string;
@@ -30,11 +31,13 @@ export class RunsService {
   private readonly root: string;
   private readonly repo: string;
   private readonly queue: SimulationQueue;
+  readonly optimizer: OptimizationService;
 
   constructor() {
     this.repo = resolve(process.env.REPO_ROOT || join(__dirname, "..", "..", ".."));
     this.root = resolve(process.env.RUNS_DIR || join(this.repo, "runs"));
     this.queue = new SimulationQueue(this.repo, this.root);
+    this.optimizer = new OptimizationService(this.root, this.queue);
   }
 
   list(): RunCard[] {
@@ -200,6 +203,9 @@ export class RunsService {
     }
   }
 
+  onApplicationShutdown() { this.queue.shutdown(); }
+  pause(id: string) { try { return this.queue.pause(id); } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : String(error)); } }
+  resume(id: string) { try { return this.queue.resume(id); } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : String(error)); } }
   jobs() { return this.queue.list(); }
   job(id: string) { return this.queue.get(id); }
 
@@ -224,36 +230,12 @@ export class RunsService {
     const overrides = Object.fromEntries(Object.entries(body).filter(([, value]) => value !== "" && value != null));
     if (run.config?.mode === "combined") {
       try {
-        return this.queue.enqueueCombined((run.configurations || []).map((group: any) => ({ ...this.configurationInput(group.config), ...overrides })));
+        return this.queue.enqueueCombined((run.configurations || []).map((group: any) => ({ ...configurationInput(group.config), ...overrides })));
       } catch (error) {
         throw new BadRequestException(error instanceof Error ? error.message : String(error));
       }
     }
-    return this.simulate({ ...this.configurationInput(run.config || {}), ...overrides });
-  }
-
-  private configurationInput(cfg: any): Record<string, string> {
-    const sleeves = (cfg.put_sleeves || []).map((row: { weight: number; dte: number; roll_at: number }) =>
-      `${Number((row.weight * 100).toPrecision(12))}:${row.dte}:${row.roll_at}`
-    ).join(",");
-    const tenors = cfg.tenors || [];
-    const names: Record<string, string> = {
-      horizon: "horizon_days", vol: "tqqq_vol", drift: "qqq_mu", initialDte: "put_dte",
-      reserve: "reserve_shares", minSpotFrac: "stagger_min_spot_frac",
-    };
-    const scalarValues = Object.fromEntries(SCALARS.map((p) => {
-      const name = names[p.key] || p.key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-      return [p.key, String(cfg[name] ?? p.value)];
-    }));
-    return {
-      ...scalarValues,
-      strategy: cfg.strategy || "wheel",
-      puts: sleeves || DEFAULTS.puts,
-      otm: tenors.map((row: { otm: number }) => row.otm).join(",") || DEFAULTS.otm,
-      contracts: tenors.map((row: { contracts: number; contracts_at_100?: number }) => row.contracts_at_100 ?? Math.round(row.contracts * 100 / (cfg.lots || 100))).join(",") || DEFAULTS.contracts,
-      putRatioGrid: (cfg.put_ratio_grid || []).map((row: number[]) => `${row[0] * 100}:${row[1]}`).join(",") || DEFAULTS.putRatioGrid,
-      rules: Array.isArray(cfg.rules) ? cfg.rules.join(",") : "",
-    };
+    return this.simulate({ ...configurationInput(run.config || {}), ...overrides });
   }
 
   private aggregate(file: string) {

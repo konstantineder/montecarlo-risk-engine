@@ -91,6 +91,33 @@ export class RunsController {
     return job;
   }
 
+  @Post("jobs/:id/pause")
+  pause(@Param("id") id: string) { return this.runs.pause(id); }
+
+  @Post("jobs/:id/resume")
+  resume(@Param("id") id: string) { return this.runs.resume(id); }
+
+  @Get("optimizer/context/:run/:path")
+  optimizerContext(@Param("run") run: string, @Param("path") path: string) { return this.runs.optimizer.context(run, Number(path)); }
+
+  @Post("optimizer/:run/:path/preview")
+  optimizerPreview(@Param("run") run: string, @Param("path") path: string, @Body() body: Record<string, unknown>) { return this.runs.optimizer.preview(run, Number(path), body || {}); }
+
+  @Post("optimizer/:run/:path/start")
+  optimize(@Param("run") run: string, @Param("path") path: string, @Body() body: Record<string, unknown>) { return this.runs.optimizer.start(run, Number(path), body || {}); }
+
+  @Get("optimizations/:id")
+  optimization(@Param("id") id: string) { return this.runs.optimizer.result(id); }
+
+  @Post("optimizations/:id/replay")
+  replay(@Param("id") id: string, @Body() body: Record<string, unknown>) { return this.runs.optimizer.replay(id, body || {}); }
+
+  @Post("optimizations/:id/save")
+  saveOptimized(@Param("id") id: string, @Body() body: Record<string, unknown>) { return this.runs.optimizer.save(id, body || {}); }
+
+  @Get("configurations")
+  configurations() { return this.runs.optimizer.configurations(); }
+
   @Get("jobs/:id")
   job(@Param("id") id: string) {
     const job = this.runs.job(id);

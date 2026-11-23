@@ -25,6 +25,12 @@ export const SCALARS: ScalarParameter[] = [
   { key: "lambdaJ", label: "Jumps per year", flag: "--lambda-j", value: 0.7, group: "Model", min: 0 },
   { key: "muJ", label: "Mean log jump", flag: "--mu-j", value: -0.07, group: "Model" },
   { key: "sigmaJ", label: "Jump volatility", flag: "--sigma-j", value: 0.05, group: "Model", min: 0 },
+  { key: "callVolSensitivity", label: "Call IV sensitivity", flag: "--call-vol-sensitivity", value: 1.0, group: "Dynamic", min: -3, max: 3 },
+  { key: "callTrendSensitivity", label: "Call trend sensitivity", flag: "--call-trend-sensitivity", value: 0.5, group: "Dynamic", min: -5, max: 5 },
+  { key: "callDrawdownSensitivity", label: "Call drawdown sensitivity", flag: "--call-drawdown-sensitivity", value: 0.5, group: "Dynamic", min: -5, max: 5 },
+  { key: "callOtmMin", label: "Minimum adaptive call OTM", flag: "--call-otm-min", value: 0.01, group: "Dynamic", min: 0, max: 2 },
+  { key: "callOtmMax", label: "Maximum adaptive call OTM", flag: "--call-otm-max", value: 0.5, group: "Dynamic", min: 0, max: 2 },
+  { key: "callLookback", label: "Trend lookback days", flag: "--call-lookback", value: 20, group: "Dynamic", min: 1, max: 252, integer: true },
   { key: "harvestDrop", label: "Harvest: price drop", flag: "--harvest-drop", value: 0.08, group: "Rules", min: 0, max: 1 },
   { key: "harvestKeep", label: "Harvest: buyback fraction", flag: "--harvest-keep", value: 0.5, group: "Rules", min: 0, max: 1 },
   { key: "rollFraction", label: "Crash roll: fraction", flag: "--roll-fraction", value: 0.5, group: "Rules", min: 0, max: 1 },
@@ -48,7 +54,7 @@ export const MAX_SIMULATIONS = 1000;
 
 export const DEFAULTS: Configuration = {
   ...Object.fromEntries(SCALARS.map((p) => [p.key, String(p.value)])),
-  strategy: "wheel", puts: "10:60:30,40:90:45,50:180:90",
+  strategy: "wheel", callPolicy: "fixed", puts: "10:60:30,40:90:45,50:180:90",
   otm: "0.03,0.05,0.08,0.10", contracts: "12,12,12,10",
   putRatioGrid: "0:1,15:1.1,30:1.2,50:1.5", rules: "",
 };
@@ -124,7 +130,9 @@ function validate(cfg: Configuration) {
   const weightSum = sleeves.reduce((sum, row) => sum + row[0] / 100, 0);
   if (Math.abs(weightSum - 1) > 0.02) throw new Error("Put sleeve percents must sum to 100 for every combination.");
   if (sleeves.some(([, dte, roll]) => roll >= dte)) throw new Error("Each put sleeve's roll DTE must be shorter than its DTE.");
-  if (!["wheel", "hold"].includes(cfg.strategy)) throw new Error("Strategy must be wheel or hold.");
+  if (!["wheel", "hold", "stock"].includes(cfg.strategy)) throw new Error("Strategy must be wheel, hold, or stock.");
+  if (!["fixed", "adaptive"].includes(cfg.callPolicy)) throw new Error("Choose fixed or adaptive call rules.");
+  if (Number(cfg.callOtmMax) < Number(cfg.callOtmMin)) throw new Error("Maximum adaptive OTM must be at least its minimum.");
   if (!/^[a-z_,]*$/.test(cfg.rules)) throw new Error("Invalid rule names.");
 }
 
@@ -187,7 +195,7 @@ export function commandArguments(cfg: Configuration): string[] {
   return [
     "-m", "tqqq_book", "--progress",
     ...SCALARS.flatMap((p) => [p.flag, cfg[p.key]]),
-    "--strategy", cfg.strategy, "--puts", cfg.puts, "--otm", cfg.otm,
+    "--strategy", cfg.strategy, "--call-policy", cfg.callPolicy, "--puts", cfg.puts, "--otm", cfg.otm,
     "--contracts", cfg.contracts, "--put-ratio", cfg.putRatioGrid,
     ...(cfg.rules ? ["--rules", cfg.rules] : []),
   ];
@@ -196,3 +204,28 @@ export function commandArguments(cfg: Configuration): string[] {
 export function rangeValues(cfg: Configuration, keys: string[]) {
   return Object.fromEntries(keys.map((key) => [key, parameterValue(cfg, key)]));
 }
+
+export function configurationInput(cfg: any): Configuration {
+    const sleeves = (cfg.put_sleeves || []).map((row: { weight: number; dte: number; roll_at: number }) =>
+      `${Number((row.weight * 100).toPrecision(12))}:${row.dte}:${row.roll_at}`
+    ).join(",");
+    const tenors = cfg.tenors || [];
+    const names: Record<string, string> = {
+      horizon: "horizon_days", vol: "tqqq_vol", drift: "qqq_mu", initialDte: "put_dte",
+      reserve: "reserve_shares", minSpotFrac: "stagger_min_spot_frac",
+    };
+    const scalarValues = Object.fromEntries(SCALARS.map((p) => {
+      const name = names[p.key] || p.key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+      return [p.key, String(cfg[name] ?? p.value)];
+    }));
+    return {
+      ...scalarValues,
+      strategy: cfg.strategy || "wheel",
+      callPolicy: cfg.call_policy || "fixed",
+      puts: sleeves || DEFAULTS.puts,
+      otm: tenors.map((row: { otm: number }) => row.otm).join(",") || DEFAULTS.otm,
+      contracts: tenors.map((row: { contracts: number; contracts_at_100?: number }) => row.contracts_at_100 ?? Math.round(row.contracts * 100 / (cfg.lots || 100))).join(",") || DEFAULTS.contracts,
+      putRatioGrid: (cfg.put_ratio_grid || []).map((row: number[]) => `${row[0] * 100}:${row[1]}`).join(",") || DEFAULTS.putRatioGrid,
+      rules: Array.isArray(cfg.rules) ? cfg.rules.join(",") : "",
+    };
+  }

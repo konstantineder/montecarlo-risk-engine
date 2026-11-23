@@ -8,7 +8,8 @@ the stock dipped.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from tqqq_book.policy import CallPolicy
 from typing import Callable
 
 CONTRACT = 100
@@ -29,6 +30,9 @@ class Position:
     rolled: bool
     mark: Callable
     price: Callable
+    trend: float = 0.0
+    drawdown: float = 0.0
+    initial_iv: float = 0.71
 
 
 @dataclass(frozen=True)
@@ -329,6 +333,7 @@ class WriteCalls:
     floor_at_ref: float = 52.0
     min_spot_frac: float = 0.95
     reserve_at_ref: int = 1000
+    policy: CallPolicy = field(default_factory=CallPolicy)
     name: str = "write_calls"
 
     @property
@@ -355,10 +360,11 @@ class WriteCalls:
             need = min(max(0, int(round(contracts * self.lots / REF_LOTS)) - have), room)
             if need <= 0 or position.day + days >= position.last + 1:
                 continue
-            strike = float(max(1, round(position.spot * (1.0 + otm))))
+            target_otm = self.policy.otm(otm, position.sigma, position.initial_iv, position.trend, position.drawdown)
+            strike = float(max(1, round(position.spot * (1.0 + target_otm))))
             if put_strike and strike < put_strike:
                 continue
-            orders.append(Order(self.name, "sell_call", need, strike, position.day + days, tag, otm=otm, tenor=days))
+            orders.append(Order(self.name, "sell_call", need, strike, position.day + days, tag, otm=target_otm, tenor=days, reason=f"{self.policy.mode}: IV {position.sigma:.3f}, trend {position.trend:.3f}, drawdown {position.drawdown:.3f}, OTM {target_otm:.3f}"))
             room -= need
             if room <= 0:
                 break
@@ -368,6 +374,7 @@ class WriteCalls:
         return {
             "name": self.name,
             "says": "Every few days, sell the call ladder off the current spot. Never below the puts still on the shares, and never on the reserve.",
+            "call_policy": self.policy.mode,
             "every": self.every,
             "floor": round(self.floor, 2),
             "min_spot_frac": self.min_spot_frac,
@@ -427,7 +434,7 @@ def all_rules(cfg) -> list:
         RollDown(gap=getattr(cfg, "roll_down_gap", 12.0), floor=getattr(cfg, "roll_down_floor", 40.0)),
         PutRatio(grid=getattr(cfg, "put_ratio_grid", ((0.0, 1.0), (0.15, 1.1), (0.30, 1.2), (0.50, 1.5)))),
         WriteCalls(
-            tenors=tenors, lots=cfg.lots, spot=cfg.spot,
+            tenors=tenors, lots=cfg.lots, spot=cfg.spot, policy=CallPolicy.from_config(cfg),
             every=getattr(cfg, "write_every", 5),
             floor_at_ref=getattr(cfg, "write_floor", 52.0),
             min_spot_frac=cfg.stagger_min_spot_frac,
@@ -457,7 +464,7 @@ def catalogue(cfg) -> list[dict]:
     rows = []
     for rule in all_rules(cfg):
         row = rule.describe()
-        row["on"] = (not chosen) or rule.name in chosen
+        row["on"] = getattr(cfg, "strategy", "wheel") == "wheel" and ((not chosen) or rule.name in chosen)
         rows.append(row)
     return rows
 
