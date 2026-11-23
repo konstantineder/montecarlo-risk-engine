@@ -61,7 +61,7 @@ function table(headers, rows, onClick) {
   return grid;
 }
 
-function frame(width, height, left, right, top, bottom, xMin, xMax, yMin, yMax, yLabel) {
+function frame(width, height, left, right, top, bottom, xMin, xMax, yMin, yMax, yLabel, xLabel = "day", xFormat = Math.round) {
   let grid = "";
   for (let i = 0; i < 5; i++) {
     const value = yMin + ((yMax - yMin) * i) / 4;
@@ -74,9 +74,9 @@ function frame(width, height, left, right, top, bottom, xMin, xMax, yMin, yMax, 
     const day = xMin + ((xMax - xMin) * i) / (ticks - 1);
     const xx = left + (i / (ticks - 1)) * (width - left - right);
     grid += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${height - bottom}" stroke="#f3f0eb"/>`;
-    grid += `<text x="${xx.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="#8a837c" font-size="11" font-family="ui-monospace,monospace">${Math.round(day)}</text>`;
+    grid += `<text x="${xx.toFixed(1)}" y="${height - 22}" text-anchor="middle" fill="#8a837c" font-size="11" font-family="ui-monospace,monospace">${xFormat(day)}</text>`;
   }
-  grid += `<text x="${(left + width - right) / 2}" y="${height - 2}" text-anchor="middle" fill="#b0a89f" font-size="10" font-family="ui-monospace,monospace">day</text>`;
+  grid += `<text x="${(left + width - right) / 2}" y="${height - 4}" text-anchor="middle" fill="#b0a89f" font-size="10" font-family="ui-monospace,monospace">${xLabel}</text>`;
   return { grid, x: (day) => left + ((day - xMin) / (xMax - xMin || 1)) * (width - left - right), y: (v) => top + (1 - (v - yMin) / (yMax - yMin || 1)) * (height - top - bottom) };
 }
 
@@ -205,7 +205,7 @@ function scatter(rows) {
   let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys, 0), y1 = Math.max(...ys, 0);
   const sx = x1 - x0 || 1, sy = y1 - y0 || 1;
   x0 -= sx * 0.06; x1 += sx * 0.06; y0 -= sy * 0.06; y1 += sy * 0.06;
-  const f = frame(width, height, left, right, top, bottom, x0, x1, y0, y1, money);
+  const f = frame(width, height, left, right, top, bottom, x0, x1, y0, y1, money, "Ending spot ($)", (v) => v.toFixed(1));
   const dots = rows.map((r) =>
     `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${f.x(r.ending_spot).toFixed(1)}" cy="${f.y(r.pnl).toFixed(1)}" r="4" fill="${r.pnl < 0 ? "#a33b32" : "#5b4b8a"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
   ).join("");
@@ -218,16 +218,18 @@ function scatter(rows) {
 function histogram(rows) {
   const values = rows.map((r) => r.pnl);
   const bins = 18;
-  const low = Math.min(...values), high = Math.max(...values);
-  const span = high - low || 1;
+  let low = Math.min(...values), high = Math.max(...values);
+  if (low === high) { low -= 0.5; high += 0.5; }
+  const span = high - low;
   const counts = Array(bins).fill(0);
   values.forEach((v) => {
     const i = Math.min(bins - 1, Math.floor(((v - low) / span) * bins));
     counts[i] += 1;
   });
   const max = Math.max(...counts, 1);
-  const width = 720, height = 240, left = 78, right = 16, top = 16, bottom = 36;
-  const f = frame(width, height, left, right, top, bottom, low, high, 0, max, (v) => String(Math.round(v)));
+  const width = 720, height = 300, left = 52, right = 44, top = 16, bottom = 44;
+  const compactMoney = (v) => `${v < 0 ? "−" : ""}$${Math.abs(v) >= 1000 ? `${(Math.abs(v) / 1000).toFixed(0)}k` : Math.abs(v).toFixed(0)}`;
+  const f = frame(width, height, left, right, top, bottom, low, high, 0, max, (v) => String(Math.round(v)), "P&L ($)", compactMoney);
   const bw = (width - left - right) / bins;
   let bars = "";
   counts.forEach((c, i) => {
@@ -235,7 +237,7 @@ function histogram(rows) {
     const x = left + i * bw;
     const y = height - bottom - h;
     const mid = low + ((i + 0.5) / bins) * span;
-    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${mid < 0 ? "#a33b32" : "#5b4b8a"}" opacity="0.8"><title>${money(mid)} · ${c} paths</title></rect>`;
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${mid < 0 ? "#a33b32" : "#8a6a2f"}" opacity="0.8"><title>${money(mid)} · ${c} paths</title></rect>`;
   });
   return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${bars}</svg>`;
 }
@@ -266,9 +268,11 @@ function maximize(title, note, svg) {
   document.body.append(modal);
 }
 
-const state = { run: null, path: null, day: null };
+const state = { run: null, path: null, day: null, view: 0 };
 
-function route() {
+async function route() {
+  state.view++;
+  if (stopJobsPolling) { stopJobsPolling(); stopJobsPolling = null; }
   const hash = location.hash.replace(/^#/, "") || "/";
   const parts = hash.split("/").filter(Boolean);
   crumb.textContent = "";
@@ -277,6 +281,8 @@ function route() {
   });
   if (parts[0] === "rules") return showRules();
   if (parts[0] === "config") return showConfig();
+  if (parts[0] === "active") return showActive();
+  if (parts[0] === "saved") return showHome(true);
   if (parts[0] === "run" && parts[2] === "path") return showPath(parts[1], Number(parts[3]));
   if (parts[0] === "run") return showRun(parts[1]);
   return showHome();
@@ -301,6 +307,9 @@ function chosenRules() {
 
 function saveRules(state) {
   localStorage.setItem("desk-rules", JSON.stringify(state));
+  const cfg = savedConfig();
+  Object.values(state).forEach((row) => Object.assign(cfg, row.values || {}));
+  saveConfig(cfg);
 }
 
 function savedConfig() {
@@ -315,34 +324,38 @@ function saveConfig(values) {
 function rulePayload() {
   const state = chosenRules() || {};
   const body = {};
+  const cfg = savedConfig();
+  Object.values(RULE_FIELDS).flat().forEach(([, key]) => { if (cfg[key] !== undefined) body[key] = cfg[key]; });
   const on = [];
   Object.entries(state).forEach(([name, row]) => {
     if (row.on !== false) on.push(name);
-    Object.entries(row.values || {}).forEach(([key, value]) => { body[key] = value; });
+    Object.entries(row.values || {}).forEach(([key, value]) => { body[key] = cfg[key] ?? value; });
   });
-  if (chosenRules()) body.rules = on.join(",");
+  if (chosenRules()) body.rules = on.join(",") || "none";
   return body;
 }
 
 async function showRules() {
+  const view = state.view;
   crumb.textContent = "Rules";
   app.innerHTML = "<h1>Rules</h1><p class='lede'>A rule is on or off, and its numbers are editable. Off means it is not called. These values are used for the next simulation and for a re-read.</p>";
   const rules = await get("/api/rules");
+  if (view !== state.view) return;
   const saved = chosenRules() || {};
-  const state = {};
+  const ruleState = {};
   rules.forEach((rule) => {
     const prior = saved[rule.name] || {};
     const values = {};
     (RULE_FIELDS[rule.name] || []).forEach(([key, bodyKey]) => {
-      values[bodyKey] = prior.values?.[bodyKey] ?? rule[key];
+      values[bodyKey] = savedConfig()[bodyKey] ?? prior.values?.[bodyKey] ?? rule[key];
     });
-    state[rule.name] = { on: prior.on !== false, values };
+    ruleState[rule.name] = { on: prior.on !== false, values };
   });
   const list = document.createElement("div");
   const draw = () => {
     list.replaceChildren();
     rules.forEach((rule) => {
-      const row = state[rule.name];
+      const row = ruleState[rule.name];
       const card = document.createElement("article");
       card.className = `rule ${row.on ? "on" : "off"}`;
       const fields = (RULE_FIELDS[rule.name] || []).map(([key, bodyKey, label]) =>
@@ -357,13 +370,13 @@ async function showRules() {
         </div>`;
       card.querySelector("button").addEventListener("click", () => {
         row.on = !row.on;
-        saveRules(state);
+        saveRules(ruleState);
         draw();
       });
       card.querySelectorAll("input").forEach((input) => {
         input.addEventListener("change", () => {
           row.values[input.dataset.key] = input.value;
-          saveRules(state);
+          saveRules(ruleState);
         });
       });
       list.append(card);
@@ -375,32 +388,10 @@ async function showRules() {
 
 async function showConfig() {
   crumb.textContent = "Configuration";
-  app.innerHTML = "<h1>Configuration</h1><p class='lede'>These values fill the simulation form. Change them here and they are used next time you run.</p>";
-  const cfg = savedConfig();
-  const form = document.createElement("form");
-  form.className = "form";
-  const field = (name, label, value, wide = false) =>
-    `<label class="${wide ? "wide" : ""}">${label}<input name="${name}" value="${cfg[name] ?? value}"/></label>`;
-  form.innerHTML = `
-    ${field("lots", "Lots", "100")}
-    ${field("horizon", "Horizon days", "100")}
-    ${field("paths", "Paths", "100")}
-    ${field("seed", "Seed", "13")}
-    ${field("spot", "Spot", "59.22")}
-    ${field("iv", "IV", "0.71")}
-    ${field("contracts", "Contracts 1w,2w,3w,4w", "12,12,12,10")}
-    <label>Strategy<select name="strategy"><option ${cfg.strategy !== "hold" ? "selected" : ""}>wheel</option><option ${cfg.strategy === "hold" ? "selected" : ""}>hold</option></select></label>
-    ${field("puts", "Put sleeves percent:dte:roll", "10:60:30,40:90:45,50:180:90", true)}
-    ${field("otm", "Call OTM 1w,2w,3w,4w", "0.03,0.05,0.08,0.10", true)}
-    <button class="run" type="submit">Save configuration</button>`;
-  const status = document.createElement("p");
-  status.className = "status";
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    saveConfig(Object.fromEntries(new FormData(form).entries()));
-    status.textContent = "Saved. The next simulation uses these.";
-  });
-  app.append(form, status);
+  app.innerHTML = "<h1>Configuration</h1><p class='lede'>Save the fixed values and advanced ranges used by the simulation form.</p>";
+  const view = state.view;
+  const form = await simulationForm(true);
+  if (view === state.view) app.append(form);
 }
 
 function exportBar(id) {
@@ -427,53 +418,25 @@ function ruleSnapshot(rules) {
   return wrap;
 }
 
-async function showHome() {
+async function showHome(savedOnly = false) {
+  const view = state.view;
   crumb.textContent = "Simulations";
-  app.innerHTML = "<h1>Simulations</h1><p class='lede'>Start a run, or open one that is already saved.</p>";
-  const form = document.createElement("form");
-  form.className = "form";
-  const cfg = savedConfig();
-  form.innerHTML = `
-    <label>Lots<input name="lots" value="${cfg.lots || 100}"/></label>
-    <label>Horizon days<input name="horizon" value="${cfg.horizon || 100}"/></label>
-    <label>Paths<input name="paths" value="${cfg.paths || 100}"/></label>
-    <label>Seed<input name="seed" value="${cfg.seed || 13}"/></label>
-    <label>Spot<input name="spot" value="${cfg.spot || 59.22}"/></label>
-    <label>IV<input name="iv" value="${cfg.iv || 0.71}"/></label>
-    <label>Strategy<select name="strategy"><option ${cfg.strategy !== "hold" ? "selected" : ""}>wheel</option><option ${cfg.strategy === "hold" ? "selected" : ""}>hold</option></select></label>
-    <label>Contracts<input name="contracts" value="${cfg.contracts || "12,12,12,10"}"/></label>
-    <label class="wide">Put sleeves percent:dte:roll<input name="puts" value="${cfg.puts || "10:60:30,40:90:45,50:180:90"}"/></label>
-    <label class="wide">Call OTM 1w,2w,3w,4w<input name="otm" value="${cfg.otm || "0.03,0.05,0.08,0.10"}"/></label>
-    <button class="run" type="submit">Run simulation</button>`;
-  const status = document.createElement("p");
-  status.className = "status";
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const body = Object.fromEntries(new FormData(form).entries());
-    Object.assign(body, rulePayload());
-    saveConfig(body);
-    form.querySelector("button").disabled = true;
-    status.textContent = "Starting…";
-    const started = await fetch("/api/simulate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
-    const tick = async () => {
-      const job = await get(`/api/jobs/${started.job}`);
-      if (job.status === "done") {
-        status.textContent = "Done.";
-        location.hash = `#/run/${job.run}`;
-        return;
-      }
-      if (job.status === "error") {
-        status.textContent = job.error || "The run failed.";
-        form.querySelector("button").disabled = false;
-        return;
-      }
-      status.textContent = "Running. A hundred paths takes a little while.";
-      setTimeout(tick, 2000);
-    };
-    tick();
-  });
-  app.append(form, status);
+  app.innerHTML = "<h1>Simulations</h1><p class='lede'>Start a run, track its progress, or open saved results.</p>";
+  app.append(simulationTabs(savedOnly ? "saved" : "new"));
+  if (!savedOnly) {
+    const form = await simulationForm();
+    if (view !== state.view) return;
+    const progress = document.createElement("div");
+    app.append(form, progress);
+    form.addEventListener("simulation-started", () => progress.refresh?.());
+    await watchJobs(progress);
+    if (view !== state.view) return;
+  }
+  const title = document.createElement("h2");
+  title.textContent = "Saved runs";
+  app.append(title);
   const runs = await get("/api/runs");
+  if (view !== state.view) return;
   if (!runs.length) {
     app.insertAdjacentHTML("beforeend", "<p class='empty'>No runs yet.</p>");
     return;
@@ -496,6 +459,7 @@ async function showHome() {
 }
 
 async function showRun(id) {
+  const view = state.view;
   state.run = id;
   crumb.innerHTML = `<a href="#/">Simulations</a> / <span>${id}</span>`;
   app.innerHTML = "<p class='lede'>Loading the run…</p>";
@@ -504,6 +468,7 @@ async function showRun(id) {
     get(`/api/runs/${id}/paths`),
     get(`/api/runs/${id}/series`),
   ]);
+  if (view !== state.view) return;
   const mc = run.monte_carlo || {};
   const book = run.book || {};
   const cfg = run.config || {};
@@ -537,20 +502,14 @@ async function showRun(id) {
   status.className = "status";
   reread.addEventListener("click", async () => {
     reread.disabled = true;
-    status.textContent = "Re-reading the same seed under the rules you have switched on…";
-    const picked = rulePayload();
-    const started = await fetch(`/api/runs/${id}/reread`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(picked),
-    }).then((r) => r.json());
-    const tick = async () => {
-      const job = await get(`/api/jobs/${started.job}`);
-      if (job.status === "done") { location.hash = `#/run/${job.run}`; return; }
-      if (job.status === "error") { status.textContent = job.error || "The re-read failed."; reread.disabled = false; return; }
-      setTimeout(tick, 2000);
-    };
-    tick();
+    status.textContent = "Queuing the same seed with your selected rules…";
+    try {
+      await postJson(`/api/runs/${id}/reread`, rulePayload());
+      location.hash = "#/active";
+    } catch (error) {
+      status.textContent = error.message;
+      reread.disabled = false;
+    }
   });
   app.append(rulesTitle, rulesNote, ruleSnapshot(run.rules), reread, status);
 
@@ -655,11 +614,13 @@ function tradeText(trades) {
 }
 
 async function showPath(id, index) {
+  const view = state.view;
   state.run = id;
   state.path = index;
   crumb.innerHTML = `<a href="#/">Simulations</a> / <a href="#/run/${id}">${id}</a> / <span>Path ${index}</span>`;
   app.innerHTML = "<p class='lede'>Loading the path…</p>";
   const row = await get(`/api/runs/${id}/paths/${index}`);
+  if (view !== state.view) return;
   const days = row.days || [];
   app.innerHTML = "";
   const h = document.createElement("h1");
@@ -769,5 +730,16 @@ function positionTable(rows) {
   return table(["Name", "Side", "Qty", "Strike", "Expiry", "Cost", "Mark", "MTM"], cells);
 }
 
-window.addEventListener("hashchange", route);
-route();
+function navigate() {
+  const view = state.view + 1;
+  route().catch((error) => {
+    if (view !== state.view) return;
+    app.replaceChildren();
+    const note = document.createElement("p");
+    note.className = "status";
+    note.textContent = error.message;
+    app.append(note);
+  });
+}
+window.addEventListener("hashchange", navigate);
+navigate();

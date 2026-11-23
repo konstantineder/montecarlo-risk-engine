@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-RUNS = Path(__file__).resolve().parents[2] / "runs"
+RUNS = Path(os.environ.get("RUNS_DIR") or Path(__file__).resolve().parents[2] / "runs").expanduser().resolve()
 
 
 def save_run(result: dict, paths: list[dict]) -> dict:

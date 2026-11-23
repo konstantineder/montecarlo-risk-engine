@@ -7,6 +7,22 @@ on:
     branches: [ main ]
 
 jobs:
+  test-desk:
+    name: Test simulation queue and interface
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desk-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desk-app/package-lock.json
+      - run: npm ci
+      - run: npm test
+
   test-in-build:
     name: Build test target (runs pytest)
     runs-on: ubuntu-latest
@@ -32,7 +48,7 @@ jobs:
 
   push-image:
     name: Push runtime image to GHCR
-    needs: test-in-build
+    needs: [test-in-build, test-desk]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 

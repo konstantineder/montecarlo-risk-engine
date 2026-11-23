@@ -32,7 +32,7 @@ def test_config_rejects_invalid_put_sleeves(sleeves, message):
         desk.config_from_mapping({"put_sleeves": sleeves})
 
 
-def test_simulation_command_saves_run_with_put_sleeves(tmp_path, monkeypatch):
+def test_simulation_command_saves_run_with_put_sleeves(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(store, "RUNS", tmp_path)
     monkeypatch.setattr(
         sys,
@@ -49,6 +49,14 @@ def test_simulation_command_saves_run_with_put_sleeves(tmp_path, monkeypatch):
             "--puts", "10:60:30,40:90:45,50:180:90",
             "--otm", "0.03,0.09,0.10,0.13",
             "--contracts", "12,10,8,8",
+            "--vol", "0.60",
+            "--rate", "0.03",
+            "--iv-elasticity", "0.75",
+            "--slippage", "0.02",
+            "--lambda-j", "0.4",
+            "--mu-j", "-0.05",
+            "--sigma-j", "0.04",
+            "--progress",
         ],
     )
 
@@ -57,6 +65,13 @@ def test_simulation_command_saves_run_with_put_sleeves(tmp_path, monkeypatch):
     latest = json.loads((tmp_path / "latest.json").read_text())
     folder = tmp_path / latest["id"]
     summary = json.loads((folder / "summary.json").read_text())
+    assert summary["config"]["tqqq_vol"] == 0.60
+    assert summary["config"]["rate"] == 0.03
+    assert summary["config"]["iv_elasticity"] == 0.75
+    assert summary["config"]["slippage"] == 0.02
+    assert summary["config"]["lambda_j"] == 0.4
+    assert summary["config"]["mu_j"] == -0.05
+    assert summary["config"]["sigma_j"] == 0.04
     assert summary["config"]["put_sleeves"] == [
         {"weight": 0.10, "dte": 60, "roll_at": 30, "tag": "d60"},
         {"weight": 0.40, "dte": 90, "roll_at": 45, "tag": "d90"},
@@ -67,3 +82,10 @@ def test_simulation_command_saves_run_with_put_sleeves(tmp_path, monkeypatch):
     assert len(paths) == 2
     assert all(len(path["days"]) == 4 for path in paths)
     assert (folder / "desk.html").is_file()
+    events = [json.loads(line.removeprefix("TQQQ_PROGRESS ")) for line in capsys.readouterr().out.splitlines() if line.startswith("TQQQ_PROGRESS ")]
+    assert [event["percent"] for event in events] == sorted(event["percent"] for event in events)
+    assert events[0]["percent"] == 0
+    assert events[-1]["percent"] == 100
+    assert events[-1]["run"] == folder.name
+    assert events[-1]["completed"] == 2
+    assert [event["completed"] for event in events if event["phase"] == "Simulating paths"] == [1, 2]

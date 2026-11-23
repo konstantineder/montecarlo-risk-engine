@@ -1,8 +1,10 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { spawn, spawnSync } from "child_process";
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { createInterface } from "readline";
 import { join, resolve } from "path";
+import { DEFAULTS, MAX_SIMULATIONS, planSimulations, SCALARS } from "./simulation-plan";
+import { SimulationQueue } from "./simulation-queue";
 
 export interface RunCard {
   id: string;
@@ -25,11 +27,12 @@ export interface RunCard {
 export class RunsService {
   private readonly root: string;
   private readonly repo: string;
-  private readonly jobs = new Map<string, { status: string; run?: string; error?: string; log: string }>();
+  private readonly queue: SimulationQueue;
 
   constructor() {
-    this.root = resolve(process.env.RUNS_DIR || join(__dirname, "..", "..", "..", "runs"));
-    this.repo = resolve(this.root, "..");
+    this.repo = resolve(process.env.REPO_ROOT || join(__dirname, "..", "..", ".."));
+    this.root = resolve(process.env.RUNS_DIR || join(this.repo, "runs"));
+    this.queue = new SimulationQueue(this.repo, this.root);
   }
 
   list(): RunCard[] {
@@ -169,85 +172,29 @@ export class RunsService {
     child.on("error", () => res.end());
   }
 
-  simulate(body: Record<string, string>) {
-    const id = Date.now().toString(36);
-    const num = (key: string, fallback: number) => {
-      const value = Number(body[key]);
-      return Number.isFinite(value) ? value : fallback;
-    };
-    const text = (key: string, fallback: string) => {
-      const value = String(body[key] || "").trim();
-      return /^[0-9A-Za-z_.,:+\- ]+$/.test(value) ? value : fallback;
-    };
-    const strategy = body.strategy === "hold" ? "hold" : "wheel";
-    const args = [
-      "-m", "tqqq_book",
-      "--lots", String(num("lots", 100)),
-      "--horizon", String(num("horizon", 100)),
-      "--paths", String(num("paths", 100)),
-      "--seed", String(num("seed", 13)),
-      "--spot", String(num("spot", 59.22)),
-      "--iv", String(num("iv", 0.71)),
-      "--strategy", strategy,
-      "--puts", text("puts", "10:60:30,40:90:45,50:180:90"),
-      "--otm", text("otm", "0.03,0.05,0.08,0.10"),
-      "--contracts", text("contracts", "12,12,12,10"),
-    ];
-    const rules = text("rules", "");
-    if (rules) args.push("--rules", rules);
-    const knobs: Array<[string, string, string]> = [
-      ["harvestDrop", "--harvest-drop", "0.08"],
-      ["harvestKeep", "--harvest-keep", "0.5"],
-      ["rollFraction", "--roll-fraction", "0.5"],
-      ["crashLine", "--crash-line", "45"],
-      ["crashDown", "--crash-down", "10"],
-      ["rollUpGap", "--roll-up-gap", "20"],
-      ["rollDownGap", "--roll-down-gap", "12"],
-      ["rollDownFloor", "--roll-down-floor", "40"],
-      ["putRatioGrid", "--put-ratio", "0:1,15:1.1,30:1.2,50:1.5"],
-      ["writeEvery", "--write-every", "5"],
-      ["writeFloor", "--write-floor", "52"],
-      ["minSpotFrac", "--min-spot-frac", "0.95"],
-      ["reserve", "--reserve", "1000"],
-      ["reenterOtm", "--reenter-otm", "0.05"],
-      ["reenterTenor", "--reenter-tenor", "10"],
-    ];
-    knobs.forEach(([key, flag, fallback]) => {
-      if (body[key] != null && String(body[key]).trim() !== "") args.push(flag, text(key, fallback));
-    });
-    const venv = join(this.repo, ".venv", "bin", "python");
-    const python = existsSync(venv) ? venv : "python3";
-    this.jobs.set(id, { status: "running", log: "" });
-    const child = spawn(python, args, {
-      cwd: this.repo,
-      env: { ...process.env, PYTHONPATH: "src" },
-    });
-    child.stdout.on("data", (chunk) => {
-      const job = this.jobs.get(id);
-      if (job) job.log = (job.log + chunk.toString()).slice(-4000);
-    });
-    child.stderr.on("data", (chunk) => {
-      const job = this.jobs.get(id);
-      if (job) job.log = (job.log + chunk.toString()).slice(-4000);
-    });
-    child.on("close", (code) => {
-      const job = this.jobs.get(id);
-      if (!job) return;
-      if (code === 0) {
-        const newest = this.list()[0];
-        job.status = "done";
-        job.run = newest?.id;
-      } else {
-        job.status = "error";
-        job.error = job.log || `exit ${code}`;
-      }
-    });
-    return { job: id };
+  configuration() {
+    return { defaults: DEFAULTS, scalars: SCALARS, maxSimulations: MAX_SIMULATIONS };
   }
 
-  job(id: string) {
-    return this.jobs.get(id) || null;
+  preview(body: Record<string, unknown>) {
+    try {
+      const { configurations, ...preview } = planSimulations(body);
+      return { ...preview, sample: configurations.slice(0, 3) };
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
   }
+
+  simulate(body: Record<string, unknown>) {
+    try {
+      return this.queue.enqueue(body);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  jobs() { return this.queue.list(); }
+  job(id: string) { return this.queue.get(id); }
 
   catalogue() {
     const python = existsSync(join(this.repo, ".venv", "bin", "python"))
@@ -264,36 +211,27 @@ export class RunsService {
     if (!run) return null;
     const cfg = run.config || {};
     const sleeves = (cfg.put_sleeves || []).map((row: { weight: number; dte: number; roll_at: number }) =>
-      `${Math.round(row.weight * 100)}:${row.dte}:${row.roll_at}`
+      `${Number((row.weight * 100).toPrecision(12))}:${row.dte}:${row.roll_at}`
     ).join(",");
     const tenors = cfg.tenors || [];
+    const names: Record<string, string> = {
+      horizon: "horizon_days", vol: "tqqq_vol", drift: "qqq_mu", initialDte: "put_dte",
+      reserve: "reserve_shares", minSpotFrac: "stagger_min_spot_frac",
+    };
+    const scalarValues = Object.fromEntries(SCALARS.map((p) => {
+      const name = names[p.key] || p.key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+      return [p.key, String(cfg[name] ?? p.value)];
+    }));
+    const overrides = Object.fromEntries(Object.entries(body).filter(([, value]) => value !== "" && value != null));
     return this.simulate({
-      lots: String(cfg.lots || 100),
-      horizon: String(cfg.horizon_days || 100),
-      paths: String(cfg.paths || 100),
-      seed: String(cfg.seed || 13),
-      spot: String(cfg.spot || 59.22),
-      iv: String(cfg.iv || 0.71),
+      ...scalarValues,
       strategy: cfg.strategy || "wheel",
-      puts: sleeves || "10:60:30,40:90:45,50:180:90",
-      otm: tenors.map((row: { otm: number }) => row.otm).join(",") || "0.03,0.05,0.08,0.10",
-      contracts: tenors.map((row: { contracts: number }) => row.contracts).join(",") || "12,12,12,10",
-      rules: body.rules || "",
-      harvestDrop: body.harvestDrop || "",
-      harvestKeep: body.harvestKeep || "",
-      rollFraction: body.rollFraction || "",
-      crashLine: body.crashLine || "",
-      crashDown: body.crashDown || "",
-      rollUpGap: body.rollUpGap || "",
-      rollDownGap: body.rollDownGap || "",
-      rollDownFloor: body.rollDownFloor || "",
-      putRatioGrid: body.putRatioGrid || "",
-      writeEvery: body.writeEvery || "",
-      writeFloor: body.writeFloor || "",
-      minSpotFrac: body.minSpotFrac || "",
-      reserve: body.reserve || "",
-      reenterOtm: body.reenterOtm || "",
-      reenterTenor: body.reenterTenor || "",
+      puts: sleeves || DEFAULTS.puts,
+      otm: tenors.map((row: { otm: number }) => row.otm).join(",") || DEFAULTS.otm,
+      contracts: tenors.map((row: { contracts: number; contracts_at_100?: number }) => row.contracts_at_100 ?? Math.round(row.contracts * 100 / (cfg.lots || 100))).join(",") || DEFAULTS.contracts,
+      putRatioGrid: (cfg.put_ratio_grid || []).map((row: number[]) => `${row[0] * 100}:${row[1]}`).join(",") || DEFAULTS.putRatioGrid,
+      rules: Array.isArray(cfg.rules) ? cfg.rules.join(",") : "",
+      ...overrides,
     });
   }
 

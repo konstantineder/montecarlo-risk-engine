@@ -233,3 +233,9 @@ PYTHONPATH=src .venv/bin/python -m tqqq_book --put-dte 180 --horizon 100 --paths
 
 Codex starts `mcp/run.sh`, which uses `.venv/bin/python` and not whatever `python3` is on `PATH`. Each run is saved under `runs/<id>/` with `summary.json`, `paths.jsonl`, and `desk.html`. The local MCP is [mcp/README.md](mcp/README.md). It is stdio only. Tools are `tqqq_book`, `tqqq_monte_carlo`, `tqqq_report`, `tqqq_runs`, and `tqqq_run`. Nothing is ordered.
 
+The desk app's **Active runs** tab shows queued simulations, path progress, report-writing stages, and links to completed results. Runs continue when you change tabs or refresh the browser. The queue runs one simulation at a time; its job history lives in the app process, while completed results are saved on disk. Restarting the app clears its queue.
+
+Open **Advanced configuration & parameter ranges** in Simulations or Configuration to set model and rule values and enable a parameter sweep. Each numeric setting, each of the four call OTM/contract values, and each put sleeve or ratio-grid component can have a start, end, and increment. A call OTM range from `0.2` to `0.5` by `0.1` produces four simulations. Adding a three-value range produces twelve simulations. The preview counts the full Cartesian product before launch; every combination must be valid, and a batch can contain at most 1,000 simulations. Save Configuration to reuse the values and ranges. Rule switches remain on the Rules tab.
+
+Run desk tests with `cd desk-app && npm ci && npm test`. Python progress and configuration tests are in `tests/pytests/test_tqqq_book_desk.py`. The CLI's `--progress` option emits flushed `TQQQ_PROGRESS` JSON events; it leaves normal CLI output available. `RUNS_DIR` can isolate test results from the saved book.
+

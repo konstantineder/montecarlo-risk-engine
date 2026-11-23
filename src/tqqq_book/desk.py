@@ -8,9 +8,11 @@ Black-Scholes price at that DTE and IV. They are not snapped to the IBKR fill.
 from __future__ import annotations
 
 import argparse
+import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -719,10 +721,19 @@ def _vol_view(cfg: BookConfig) -> dict:
     }
 
 
-def run(cfg: BookConfig | None = None) -> dict:
+def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None = None) -> dict:
     cfg = cfg or BookConfig()
+    if cfg.paths < 1 or cfg.horizon_days < 1:
+        raise ValueError("paths and horizon days must be at least 1")
+
+    def notify(phase: str, percent: float, completed: int = 0, **extra) -> None:
+        if progress:
+            progress({"phase": phase, "percent": round(percent, 2), "completed": completed, "total": cfg.paths, **extra})
+
+    notify("Building opening book", 0)
     path_days = cfg.horizon_days
     book = build_book(cfg)
+    notify("Generating price paths", 2)
     spots = _paths(cfg, path_days)
     rows = []
     navs = np.empty((cfg.paths, path_days + 1), dtype=float)
@@ -736,6 +747,8 @@ def run(cfg: BookConfig | None = None) -> dict:
         trade_counts[i] = [len(day["trades"]) for day in days]
         paths.append({"path": i, **stats, "days": days})
         rows.append(stats)
+        notify("Simulating paths", 5 + 85 * (i + 1) / cfg.paths, i + 1)
+    notify("Calculating summary", 92, cfg.paths)
     call_lines = [
         {
             "tag": leg.tag,
@@ -789,6 +802,7 @@ def run(cfg: BookConfig | None = None) -> dict:
             "Each day the wheel calls strategy.apply on the position. The rules are listed below."
         ),
         "config": {
+            **asdict(cfg),
             "lots": cfg.lots,
             "shares": book["shares"],
             "spot": cfg.spot,
@@ -809,7 +823,7 @@ def run(cfg: BookConfig | None = None) -> dict:
             "rules": list(cfg.rules),
             "paths": cfg.paths,
             "seed": cfg.seed,
-            "tenors": [{"tag": t.tag, "days": t.days, "otm": t.otm, "contracts": _qty(t.contracts, cfg.lots)} for t in cfg.tenors],
+            "tenors": [{"tag": t.tag, "days": t.days, "otm": t.otm, "contracts": _qty(t.contracts, cfg.lots), "contracts_at_100": t.contracts} for t in cfg.tenors],
         },
         "book": {
             "deployed": book["deployed"],
@@ -834,10 +848,14 @@ def run(cfg: BookConfig | None = None) -> dict:
         row["mtm_p95"] = float(np.quantile(mtm[:, day], 0.95))
     from tqqq_book.report import write_report
     from tqqq_book.store import save_run
+    notify("Saving paths", 94, cfg.paths)
     result["saved"] = save_run(result, paths)
+    notify("Writing report", 96, cfg.paths)
     html = write_report(result, Path(result["saved"]["dir"]) / "desk.html")
+    notify("Finishing report", 98, cfg.paths)
     write_report(result, Path(result["saved"]["dir"]).parent / "tqqq-desk.html")
     result["saved"]["html"] = html
+    notify("Completed", 100, cfg.paths, run=result["saved"]["id"])
     return result
 
 
@@ -908,6 +926,11 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
         qqq_mu=float(pick("qqqMu", "qqq_mu", "drift", default=base.qqq_mu)),
         tqqq_vol=float(pick("tqqqVol", "tqqq_vol", "vol", default=base.tqqq_vol)),
         iv=float(pick("iv", default=base.iv)),
+        iv_elasticity=float(pick("ivElasticity", "iv_elasticity", default=base.iv_elasticity)),
+        slippage=float(pick("slippage", default=base.slippage)),
+        lambda_j=float(pick("lambdaJ", "lambda_j", default=base.lambda_j)),
+        mu_j=float(pick("muJ", "mu_j", default=base.mu_j)),
+        sigma_j=float(pick("sigmaJ", "sigma_j", default=base.sigma_j)),
         rate=float(pick("rate", default=base.rate)),
         horizon_days=int(pick("horizonDays", "horizon_days", "horizon", default=base.horizon_days)),
         put_dte=int(pick("initialDte", "initial_dte", "putDte", "put_dte", "dte", default=base.put_dte)),
@@ -950,6 +973,12 @@ def main() -> None:
     parser.add_argument("--contracts", default="12,12,12,10")
     parser.add_argument("--spot", type=float, default=59.22)
     parser.add_argument("--iv", type=float, default=0.71)
+    parser.add_argument("--rate", type=float, default=0.04)
+    parser.add_argument("--iv-elasticity", type=float, default=0.86)
+    parser.add_argument("--slippage", type=float, default=0.05)
+    parser.add_argument("--lambda-j", type=float, default=0.7)
+    parser.add_argument("--mu-j", type=float, default=-0.07)
+    parser.add_argument("--sigma-j", type=float, default=0.05)
     parser.add_argument("--vol", type=float, default=0.66)
     parser.add_argument("--drift", type=float, default=0.12)
     parser.add_argument("--paths", type=int, default=400)
@@ -972,6 +1001,7 @@ def main() -> None:
     parser.add_argument("--reenter-otm", type=float, default=0.05)
     parser.add_argument("--reenter-tenor", type=int, default=10)
     parser.add_argument("--report", default="", help="Write an HTML desk report to this path.")
+    parser.add_argument("--progress", action="store_true", help="Stream JSON progress events for the simulation queue.")
     parser.add_argument("--rebuild", action="store_true", help="Rewrite the latest desk.html from the saved run. Does not resimulate.")
     args = parser.parse_args()
     if args.rebuild:
@@ -983,6 +1013,9 @@ def main() -> None:
         print(write_report(saved, folder.parent / "tqqq-desk.html"))
         return
     put_dte = args.initial_dte if args.initial_dte is not None else args.put_dte
+    def emit_progress(event: dict) -> None:
+        print("TQQQ_PROGRESS " + json.dumps(event), flush=True)
+
     result = run(config_from_mapping(vars(args) | {
         "horizon_days": args.horizon,
         "put_dte": put_dte,
@@ -990,7 +1023,7 @@ def main() -> None:
         "vol": args.vol,
         "drift": args.drift,
         "put_sleeves": args.puts,
-    }))
+    }), progress=emit_progress if args.progress else None)
     if args.report:
         from tqqq_book.report import write_report
         print(write_report(result, args.report))

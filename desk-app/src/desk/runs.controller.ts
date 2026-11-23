@@ -68,9 +68,18 @@ export class RunsController {
   }
 
   @Post("simulate")
-  simulate(@Body() body: Record<string, string>) {
+  simulate(@Body() body: Record<string, unknown>) {
     return this.runs.simulate(body || {});
   }
+
+  @Get("simulation/config")
+  configuration() { return this.runs.configuration(); }
+
+  @Post("simulation/preview")
+  preview(@Body() body: Record<string, unknown>) { return this.runs.preview(body || {}); }
+
+  @Get("jobs")
+  jobs() { return this.runs.jobs(); }
 
   @Post("runs/:id/reread")
   reread(@Param("id") id: string, @Body() body: Record<string, string>) {
