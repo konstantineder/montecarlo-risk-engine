@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { spawn, spawnSync } from "child_process";
-import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { createReadStream, existsSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, readSync, closeSync } from "fs";
 import { createInterface } from "readline";
 import { join, resolve } from "path";
 import { DEFAULTS, MAX_SIMULATIONS, planSimulations, SCALARS, configurationInput } from "./simulation-plan";
@@ -26,12 +26,21 @@ export interface RunCard {
   configuration_count: number;
 }
 
+interface RunMeta {
+  index: any[];
+  series: any[];
+  offsets: Record<string, number>;
+}
+
 @Injectable()
 export class RunsService {
   private readonly root: string;
   private readonly repo: string;
   private readonly queue: SimulationQueue;
   readonly optimizer: OptimizationService;
+  private readonly memory = new Map<string, { stamp: number; value: any }>();
+  private listStamp = 0;
+  private listCards: RunCard[] | null = null;
 
   constructor() {
     this.repo = resolve(process.env.REPO_ROOT || join(__dirname, "..", "..", ".."));
@@ -40,40 +49,79 @@ export class RunsService {
     this.optimizer = new OptimizationService(this.root, this.queue);
   }
 
-  list(): RunCard[] {
+  list(limit = 20, offset = 0) {
+    const cards = this.allCards();
+    const size = Math.max(1, Math.min(200, limit));
+    const start = Math.max(0, offset);
+    return { items: cards.slice(start, start + size), total: cards.length, offset: start, limit: size };
+  }
+
+  private allCards(): RunCard[] {
     if (!existsSync(this.root)) return [];
+    const stamp = this.folderStamp();
+    if (this.listCards && this.listStamp === stamp) return this.listCards;
     const cards: RunCard[] = [];
     for (const name of readdirSync(this.root)) {
-      const summary = join(this.root, name, "summary.json");
-      if (!existsSync(summary)) continue;
-      const raw = JSON.parse(readFileSync(summary, "utf8"));
-      const mc = raw.monte_carlo || {};
-      const cfg = raw.config || {};
-      cards.push({
-        id: raw.id || name,
-        created: raw.created || statSync(summary).mtime.toISOString(),
-        strategy: cfg.strategy || mc.strategy || "wheel",
-        paths: mc.paths || cfg.paths || 0,
-        seed: cfg.seed || 0,
-        horizon_days: cfg.horizon_days || 0,
-        initial_dte: cfg.initial_dte || cfg.put_dte || 0,
-        median: mc.median || 0,
-        mean: mc.mean || 0,
-        p05: mc.p05 || 0,
-        p95: mc.p95 || 0,
-        prob_loss: mc.prob_loss || 0,
-        deployed: raw.book?.deployed || 0,
-        lots: cfg.lots || 0,
-        mode: cfg.mode || "separate",
-        configuration_count: cfg.configuration_count || 1,
-      });
+      const card = this.tile(name);
+      if (card) cards.push(card);
     }
-    return cards.sort((a, b) => (a.created < b.created ? 1 : -1));
+    cards.sort((a, b) => (a.created < b.created ? 1 : -1));
+    this.listCards = cards;
+    this.listStamp = stamp;
+    return cards;
+  }
+
+  private folderStamp() {
+    return readdirSync(this.root).reduce((sum, name) => {
+      const file = join(this.root, name, "summary.json");
+      return existsSync(file) ? sum + statSync(file).mtimeMs : sum;
+    }, 0);
+  }
+
+  private tile(id: string): RunCard | null {
+    const summary = join(this.root, id, "summary.json");
+    if (!existsSync(summary)) return null;
+    const stamp = statSync(summary).mtimeMs;
+    const cached = this.memory.get(`tile:${id}`);
+    if (cached && cached.stamp === stamp) return cached.value;
+    const tileFile = join(this.root, id, "tile.json");
+    if (existsSync(tileFile) && statSync(tileFile).mtimeMs >= stamp) {
+      const card = JSON.parse(readFileSync(tileFile, "utf8"));
+      this.memory.set(`tile:${id}`, { stamp, value: card });
+      return card;
+    }
+    const raw = JSON.parse(readFileSync(summary, "utf8"));
+    const mc = raw.monte_carlo || {};
+    const cfg = raw.config || {};
+    const card: RunCard = {
+      id: raw.id || id,
+      created: raw.created || statSync(summary).mtime.toISOString(),
+      strategy: cfg.strategy || mc.strategy || "wheel",
+      paths: mc.paths || cfg.paths || 0,
+      seed: cfg.seed || 0,
+      horizon_days: cfg.horizon_days || 0,
+      initial_dte: cfg.initial_dte || cfg.put_dte || 0,
+      median: mc.median || 0,
+      mean: mc.mean || 0,
+      p05: mc.p05 || 0,
+      p95: mc.p95 || 0,
+      prob_loss: mc.prob_loss || 0,
+      deployed: raw.book?.deployed || 0,
+      lots: cfg.lots || 0,
+      mode: cfg.mode || "separate",
+      configuration_count: cfg.configuration_count || 1,
+    };
+    try { writeFileSync(tileFile, JSON.stringify(card)); } catch { /* a read-only run still lists */ }
+    this.memory.set(`tile:${id}`, { stamp, value: card });
+    return card;
   }
 
   get(id: string) {
     const file = join(this.root, id, "summary.json");
     if (!existsSync(file)) return null;
+    const stamp = statSync(file).mtimeMs;
+    const cached = this.memory.get(`summary:${id}`);
+    if (cached && cached.stamp === stamp) return cached.value;
     const raw = JSON.parse(readFileSync(file, "utf8"));
     if (raw.median_path) {
       raw.median_path = {
@@ -83,40 +131,140 @@ export class RunsService {
         ending_shares: raw.median_path.ending_shares,
       };
     }
+    this.memory.set(`summary:${id}`, { stamp, value: raw });
     return raw;
   }
 
-  paths(id: string) {
-    const file = join(this.root, id, "paths.jsonl");
-    if (!existsSync(file)) return null;
-    return this.readLines(file, (row) => ({
-      path: row.path,
-      configuration: row.configuration,
-      pnl: row.pnl,
-      ending_spot: row.ending_spot,
-      min_spot: row.min_spot,
-      max_dd: row.max_dd,
-      ending_shares: row.ending_shares,
-      assignments: row.assignments,
-      new_calls: row.new_calls,
-      roll_cash: row.roll_cash,
-      floor_after: row.floor_after,
-      trades: Array.isArray(row.days)
-        ? row.days.reduce((n: number, day: { trades?: unknown[] }) => n + (day.trades?.length || 0), 0)
-        : 0,
-    }));
+  async paths(id: string) {
+    const meta = await this.ensureMeta(id);
+    return meta ? meta.index : null;
   }
 
   path(id: string, index: number) {
     const file = join(this.root, id, "paths.jsonl");
     if (!existsSync(file) || Number.isNaN(index)) return null;
-    return this.findLine(file, (row) => row.path === index);
+    const stamp = statSync(file).mtimeMs;
+    const key = `path:${id}:${index}`;
+    const cached = this.memory.get(key);
+    if (cached && cached.stamp === stamp) return Promise.resolve(cached.value);
+    return this.ensureMeta(id).then((meta) => {
+      const offset = meta?.offsets?.[String(index)];
+      const row = offset == null ? null : this.readAt(file, offset);
+      if (row) this.memory.set(key, { stamp, value: row });
+      return row;
+    });
   }
 
-  series(id: string) {
+  async series(id: string) {
+    const meta = await this.ensureMeta(id);
+    return meta ? meta.series : null;
+  }
+
+  private async ensureMeta(id: string): Promise<RunMeta | null> {
     const file = join(this.root, id, "paths.jsonl");
     if (!existsSync(file)) return null;
-    return this.aggregate(file);
+    const stamp = statSync(file).mtimeMs;
+    const cached = this.memory.get(`meta:${id}`);
+    if (cached && cached.stamp === stamp) return cached.value;
+    const indexFile = join(this.root, id, "index.json");
+    const seriesFile = join(this.root, id, "series.json");
+    const offsetFile = join(this.root, id, "offsets.json");
+    if (existsSync(indexFile) && existsSync(seriesFile) && existsSync(offsetFile) && statSync(indexFile).mtimeMs >= stamp) {
+      const meta = {
+        index: JSON.parse(readFileSync(indexFile, "utf8")),
+        series: JSON.parse(readFileSync(seriesFile, "utf8")),
+        offsets: JSON.parse(readFileSync(offsetFile, "utf8")),
+      };
+      this.memory.set(`meta:${id}`, { stamp, value: meta });
+      return meta;
+    }
+    const meta = await this.scan(file);
+    try {
+      writeFileSync(indexFile, JSON.stringify(meta.index));
+      writeFileSync(seriesFile, JSON.stringify(meta.series));
+      writeFileSync(offsetFile, JSON.stringify(meta.offsets));
+    } catch { /* cache in memory even if the disk write fails */ }
+    this.memory.set(`meta:${id}`, { stamp, value: meta });
+    return meta;
+  }
+
+  private scan(file: string): Promise<RunMeta> {
+    return new Promise((resolveRows, reject) => {
+      const index: any[] = [];
+      const offsets: Record<string, number> = {};
+      const byDay = new Map<number, { shares: number[]; puts: number[]; shortCalls: number[]; shortPuts: number[]; floor: number[]; avg: number[] }>();
+      const stream = createReadStream(file);
+      const lines = createInterface({ input: stream });
+      let offset = 0;
+      lines.on("line", (line) => {
+        const next = offset + Buffer.byteLength(line) + 1;
+        if (line.trim()) {
+          const row = JSON.parse(line);
+          offsets[String(row.path)] = offset;
+          let trades = 0;
+        for (const day of row.days || []) {
+          trades += day.trades?.length || 0;
+          let shares = 0, puts = 0, shortCalls = 0, shortPuts = 0, floor = 0, weighted = 0;
+          for (const leg of day.position || []) {
+            const qty = Number(leg.qty) || 0;
+            if (leg.name === "share") shares = qty;
+            else if (leg.name === "put" && leg.side === "long") {
+              puts += qty;
+              weighted += qty * (Number(leg.strike) || 0);
+              floor = floor === 0 ? Number(leg.strike) : Math.min(floor, Number(leg.strike));
+            } else if (leg.name === "call" && leg.side === "short") shortCalls += qty;
+            else if (leg.name === "put" && leg.side === "short") shortPuts += qty;
+          }
+          const bucket = byDay.get(day.day) || { shares: [], puts: [], shortCalls: [], shortPuts: [], floor: [], avg: [] };
+          bucket.shares.push(shares / 100);
+          bucket.puts.push(puts);
+          bucket.shortCalls.push(shortCalls);
+          bucket.shortPuts.push(shortPuts);
+          bucket.floor.push(floor);
+          bucket.avg.push(puts ? weighted / puts : 0);
+          byDay.set(day.day, bucket);
+        }
+        index.push({
+          path: row.path,
+          configuration: row.configuration,
+          pnl: row.pnl,
+          ending_spot: row.ending_spot,
+          min_spot: row.min_spot,
+          max_dd: row.max_dd,
+          ending_shares: row.ending_shares,
+          assignments: row.assignments,
+          new_calls: row.new_calls,
+          roll_cash: row.roll_cash,
+          floor_after: row.floor_after,
+          trades,
+        });
+        }
+        offset = next;
+      });
+      lines.on("close", () => {
+        const median = (values: number[]) => {
+          const sorted = values.slice().sort((a, b) => a - b);
+          return sorted[Math.floor(sorted.length / 2)] || 0;
+        };
+        resolveRows({
+          index,
+          offsets,
+          series: [...byDay.keys()].sort((a, b) => a - b).map((day) => {
+            const bucket = byDay.get(day)!;
+            return {
+              day,
+              shares: median(bucket.shares),
+              puts: median(bucket.puts),
+              shortCalls: median(bucket.shortCalls),
+              shortPuts: median(bucket.shortPuts),
+              floor: median(bucket.floor),
+              avg: median(bucket.avg),
+            };
+          }),
+        });
+      });
+      lines.on("error", reject);
+    });
   }
 
   streamJson(id: string, res: any, kind: "full" | "mtm" | "book" = "full") {
@@ -238,72 +386,25 @@ export class RunsService {
     return this.simulate({ ...configurationInput(run.config || {}), ...overrides });
   }
 
-  private aggregate(file: string) {
-    return new Promise((resolveRows, reject) => {
-      const byDay = new Map<number, { shares: number[]; puts: number[]; shortCalls: number[]; shortPuts: number[]; floor: number[]; avg: number[] }>();
-      const stream = createReadStream(file);
-      const lines = createInterface({ input: stream });
-      lines.on("line", (line) => {
-        if (!line.trim()) return;
-        const row = JSON.parse(line);
-        for (const day of row.days || []) {
-          let shares = 0, puts = 0, shortCalls = 0, shortPuts = 0;
-          let floor = 0, weighted = 0;
-          for (const leg of day.position || []) {
-            const qty = Number(leg.qty) || 0;
-            if (leg.name === "share") shares = qty;
-            else if (leg.name === "put" && leg.side === "long") {
-              puts += qty;
-              weighted += qty * (Number(leg.strike) || 0);
-              floor = floor === 0 ? Number(leg.strike) : Math.min(floor, Number(leg.strike));
-            }
-            else if (leg.name === "call" && leg.side === "short") shortCalls += qty;
-            else if (leg.name === "put" && leg.side === "short") shortPuts += qty;
-          }
-          const bucket = byDay.get(day.day) || { shares: [], puts: [], shortCalls: [], shortPuts: [], floor: [], avg: [] };
-          bucket.shares.push(shares / 100);
-          bucket.puts.push(puts);
-          bucket.shortCalls.push(shortCalls);
-          bucket.shortPuts.push(shortPuts);
-          bucket.floor.push(floor);
-          bucket.avg.push(puts ? weighted / puts : 0);
-          byDay.set(day.day, bucket);
-        }
-      });
-      lines.on("close", () => {
-        const median = (values: number[]) => {
-          const sorted = values.slice().sort((a, b) => a - b);
-          return sorted[Math.floor(sorted.length / 2)] || 0;
-        };
-        resolveRows([...byDay.keys()].sort((a, b) => a - b).map((day) => {
-          const bucket = byDay.get(day)!;
-          return {
-            day,
-            shares: median(bucket.shares),
-            puts: median(bucket.puts),
-            shortCalls: median(bucket.shortCalls),
-            shortPuts: median(bucket.shortPuts),
-            floor: median(bucket.floor),
-            avg: median(bucket.avg),
-          };
-        }));
-      });
-      lines.on("error", reject);
-    });
-  }
-
-  private readLines(file: string, map: (row: any) => any): Promise<any[]> {
-    return new Promise((resolveRows, reject) => {
-      const rows: any[] = [];
-      const stream = createReadStream(file);
-      const lines = createInterface({ input: stream });
-      lines.on("line", (line) => {
-        if (!line.trim()) return;
-        rows.push(map(JSON.parse(line)));
-      });
-      lines.on("close", () => resolveRows(rows));
-      lines.on("error", reject);
-    });
+  private readAt(file: string, offset: number) {
+    const handle = openSync(file, "r");
+    try {
+      const parts: Buffer[] = [];
+      let at = offset;
+      for (;;) {
+        const chunk = Buffer.alloc(256 * 1024);
+        const read = readSync(handle, chunk, 0, chunk.length, at);
+        if (read <= 0) break;
+        const slice = chunk.subarray(0, read);
+        const end = slice.indexOf(10);
+        parts.push(end === -1 ? slice : slice.subarray(0, end));
+        if (end !== -1) break;
+        at += read;
+      }
+      return JSON.parse(Buffer.concat(parts).toString("utf8"));
+    } finally {
+      closeSync(handle);
+    }
   }
 
   private findLine(file: string, match: (row: any) => boolean): Promise<any | null> {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Res } from "@nestjs/common";
+import { Body, Controller, Get, NotFoundException, Param, Post, Query, Res } from "@nestjs/common";
 import { RunsService } from "./runs.service";
 
 @Controller("api")
@@ -6,8 +6,8 @@ export class RunsController {
   constructor(private readonly runs: RunsService) {}
 
   @Get("runs")
-  list() {
-    return this.runs.list();
+  list(@Query("limit") limit?: string, @Query("offset") offset?: string) {
+    return this.runs.list(Number(limit) || 20, Number(offset) || 0);
   }
 
   @Get("runs/:id")

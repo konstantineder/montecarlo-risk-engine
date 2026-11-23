@@ -14,10 +14,14 @@ const when = (stamp) => {
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} UTC` : stamp;
 };
 
+const cache = new Map();
 async function get(url) {
+  if (cache.has(url)) return cache.get(url);
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const data = await res.json();
+  if (url.startsWith("/api/runs/")) cache.set(url, data);
+  return data;
 }
 
 function facts(pairs) {
@@ -201,13 +205,14 @@ function bookCounts(day) {
 
 function scatter(rows) {
   const width = 720, height = 280, left = 78, right = 16, top = 16, bottom = 36;
-  const xs = rows.map((r) => r.ending_spot), ys = rows.map((r) => r.pnl);
+  const sample = rows.length > 2000 ? rows.filter((_, i) => i % Math.ceil(rows.length / 2000) === 0) : rows;
+  const xs = sample.map((r) => r.ending_spot), ys = sample.map((r) => r.pnl);
   let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys, 0), y1 = Math.max(...ys, 0);
   const sx = x1 - x0 || 1, sy = y1 - y0 || 1;
   x0 -= sx * 0.06; x1 += sx * 0.06; y0 -= sy * 0.06; y1 += sy * 0.06;
   const f = frame(width, height, left, right, top, bottom, x0, x1, y0, y1, money, "Ending spot ($)", (v) => v.toFixed(1));
-  const dots = rows.map((r) =>
-    `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${f.x(r.ending_spot).toFixed(1)}" cy="${f.y(r.pnl).toFixed(1)}" r="4" fill="${r.pnl < 0 ? "#a33b32" : "#5b4b8a"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
+  const dots = sample.map((r) =>
+    `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${f.x(r.ending_spot).toFixed(1)}" cy="${f.y(r.pnl).toFixed(1)}" r="3" fill="${r.pnl < 0 ? "#a33b32" : "#5b4b8a"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
   ).join("");
   const zero = y0 <= 0 && y1 >= 0
     ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
@@ -437,27 +442,43 @@ async function showHome(savedOnly = false) {
   const title = document.createElement("h2");
   title.textContent = "Saved runs";
   app.append(title);
-  const runs = await get("/api/runs");
-  if (view !== state.view) return;
-  if (!runs.length) {
-    app.insertAdjacentHTML("beforeend", "<p class='empty'>No runs yet.</p>");
-    return;
-  }
   const cards = document.createElement("div");
   cards.className = "cards";
-  runs.forEach((run) => {
-    const btn = document.createElement("button");
-    btn.className = "sim";
-    const cls = run.median < 0 ? "loss" : "gain";
-    btn.innerHTML = `
-      <div class="when">${when(run.created)}${run.mode === "combined" ? " · combined run" : ` · seed ${run.seed}`}</div>
-      <strong class="${cls}">${money(run.median)}</strong>
-      <div class="meta">${run.mode === "combined" ? `Combined · ${run.configuration_count} configurations` : `${run.strategy} · ${run.lots} lots`} · ${run.paths} paths · ${run.horizon_days}d</div>
-      <div class="meta">p05 ${money(run.p05)} · p95 ${money(run.p95)} · loss ${pct(run.prob_loss)}</div>`;
-    btn.addEventListener("click", () => { location.hash = `#/run/${run.id}`; });
-    cards.append(btn);
-  });
-  app.append(cards);
+  const more = document.createElement("button");
+  more.className = "ghost";
+  let offset = 0;
+  const limit = 20;
+  const load = async () => {
+    more.disabled = true;
+    const page = await get(`/api/runs?limit=${limit}&offset=${offset}`);
+    if (view !== state.view) return;
+    const items = page.items || page;
+    if (!items.length && offset === 0) {
+      app.insertAdjacentHTML("beforeend", "<p class='empty'>No runs yet.</p>");
+      more.remove();
+      return;
+    }
+    items.forEach((run) => {
+      const btn = document.createElement("button");
+      btn.className = "sim";
+      const cls = run.median < 0 ? "loss" : "gain";
+      btn.innerHTML = `
+        <div class="when">${when(run.created)}${run.mode === "combined" ? " · combined run" : ` · seed ${run.seed}`}</div>
+        <strong class="${cls}">${money(run.median)}</strong>
+        <div class="meta">${run.mode === "combined" ? `Combined · ${run.configuration_count} configurations` : `${run.strategy} · ${run.lots} lots`} · ${run.paths} paths · ${run.horizon_days}d</div>
+        <div class="meta">p05 ${money(run.p05)} · p95 ${money(run.p95)} · loss ${pct(run.prob_loss)}</div>`;
+      btn.addEventListener("click", () => { location.hash = `#/run/${run.id}`; });
+      cards.append(btn);
+    });
+    offset += items.length;
+    const left = (page.total || items.length) - offset;
+    more.hidden = left <= 0;
+    more.disabled = false;
+    more.textContent = `More (${left} left)`;
+  };
+  app.append(cards, more);
+  more.addEventListener("click", load);
+  await load();
 }
 
 async function showRun(id) {
@@ -465,10 +486,9 @@ async function showRun(id) {
   state.run = id;
   crumb.innerHTML = `<a href="#/">Simulations</a> / <span>${id}</span>`;
   app.innerHTML = "<p class='lede'>Loading the run…</p>";
-  const [run, paths, series] = await Promise.all([
+  const [run, paths] = await Promise.all([
     get(`/api/runs/${id}`),
     get(`/api/runs/${id}/paths`),
-    get(`/api/runs/${id}/series`),
   ]);
   if (view !== state.view) return;
   const mc = run.monte_carlo || {};
@@ -535,8 +555,12 @@ async function showRun(id) {
       chartCard("Mark to market", "5th to 95th of cash plus marks.", bandChart(ribbon, "mtm_p05", "mtm_p50", "mtm_p95", { money: true })),
     );
   }
-  if (series.length) {
-    grid.append(
+  const seriesHost = document.createElement("div");
+  seriesHost.className = "chart-grid";
+  grid.append(seriesHost);
+  get(`/api/runs/${id}/series`).then((series) => {
+    if (view !== state.view || !series?.length) return;
+    seriesHost.append(
       chartCard(
         combined ? "Position, pooled median" : "Position, median path",
         "Contracts. Shares are divided by 100 so they sit next to the puts.",
@@ -556,7 +580,7 @@ async function showRun(id) {
         ]),
       ),
     );
-  }
+  }).catch(() => undefined);
   grid.append(
     chartCard("Where paths landed", "Horizontal is ending spot, vertical is P&L. Click a point.", scatter(paths)),
     chartCard("P&L distribution", "Brick is a loss. Gold is a gain. Left axis is the path count.", histogram(paths)),
@@ -587,24 +611,47 @@ async function showRun(id) {
     app.append(filter);
   }
   const host = document.createElement("div");
-  app.append(host);
+  const pager = document.createElement("div");
+  pager.className = "exports";
+  app.append(host, pager);
+  let page = 0;
+  const pageSize = 100;
   const draw = () => {
     const ordered = paths.filter((p) => !combined || !filter.value || p.configuration === Number(filter.value)).sort((a, b) => (a[key] - b[key]) * dir);
+    const pages = Math.max(1, Math.ceil(ordered.length / pageSize));
+    page = Math.min(page, pages - 1);
+    const slice = ordered.slice(page * pageSize, (page + 1) * pageSize);
     host.replaceChildren(table(
       ["Index", ...(combined ? ["Configuration"] : []), "Spot", "P&L", "Min spot", "Drawdown", "Shares", "Trades"],
-      ordered.map((r) => [String(r.path), ...(combined ? [String(r.configuration)] : []), px(r.ending_spot), money(r.pnl), px(r.min_spot), money(r.max_dd), String(r.ending_shares), String(r.trades)]),
-      (i) => { location.hash = `#/run/${id}/path/${ordered[i].path}`; }
+      slice.map((r) => [String(r.path), ...(combined ? [String(r.configuration)] : []), px(r.ending_spot), money(r.pnl), px(r.min_spot), money(r.max_dd), String(r.ending_shares), String(r.trades)]),
+      (i) => { location.hash = `#/run/${id}/path/${slice[i].path}`; }
     ));
     host.querySelectorAll("th").forEach((th, i) => {
       const map = ["path", ...(combined ? ["configuration"] : []), "ending_spot", "pnl", "min_spot", "max_dd", "ending_shares", "trades"];
       th.addEventListener("click", () => {
         dir = key === map[i] ? dir * -1 : (map[i] === "path" ? 1 : -1);
         key = map[i];
+        page = 0;
         draw();
       });
     });
+    pager.innerHTML = "";
+    const label = document.createElement("span");
+    label.className = "note";
+    label.textContent = `${ordered.length} paths · ${page * pageSize + 1}–${Math.min(ordered.length, (page + 1) * pageSize)}`;
+    const prev = document.createElement("button");
+    prev.className = "ghost";
+    prev.textContent = "Previous";
+    prev.disabled = page === 0;
+    prev.addEventListener("click", () => { page -= 1; draw(); });
+    const next = document.createElement("button");
+    next.className = "ghost";
+    next.textContent = "Next";
+    next.disabled = page >= pages - 1;
+    next.addEventListener("click", () => { page += 1; draw(); });
+    pager.append(label, prev, next);
   };
-  filter.addEventListener("change", draw);
+  filter.addEventListener("change", () => { page = 0; draw(); });
   draw();
 }
 

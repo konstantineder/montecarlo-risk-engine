@@ -37,7 +37,8 @@ function setup(t, options = {}) {
       else if (url === '/api/runs/combined') value = options.run;
       else if (url === '/api/runs/combined/paths') value = options.paths;
       else if (url === '/api/runs/combined/series') value = [];
-      else if (url === '/api/runs') value = [];
+      else if (url.startsWith('/api/runs?')) value = { items: [], total: 0, offset: 0, limit: 20 };
+      else if (url === '/api/runs') value = { items: [], total: 0, offset: 0, limit: 20 };
       else if (url === '/api/jobs') value = server.jobs;
       else if (url === '/api/jobs/batches/old-batch/combine') {
         server.jobs.push({id:'merged',batch:'merged-batch',sourceBatch:'old-batch',mode:'combined',configurationCount:2,config:DEFAULTS,configurations:[DEFAULTS,DEFAULTS],variations:{},status:'running',phase:'Combining saved results',progress:25,completedPaths:50,totalPaths:200,index:1,batchSize:1});
