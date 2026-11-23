@@ -8,8 +8,11 @@ on:
 
 jobs:
   test-desk:
-    name: Test simulation queue and interface
-    runs-on: ubuntu-latest
+    name: Test desk on ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: desk-app
