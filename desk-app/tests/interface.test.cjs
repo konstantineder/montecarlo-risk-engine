@@ -36,6 +36,7 @@ function setup(t, options = {}) {
       else if (url === '/api/rules') value = [{ name: 'harvest', says: 'Harvest short calls', drop: 0.08, keep: 0.5 }];
       else if (url === '/api/runs/combined') value = options.run;
       else if (url === '/api/runs/combined/paths') value = options.paths;
+      else if (url.startsWith('/api/runs/combined/paths/')) value = options.pathDetails?.[url.split('/').at(-1)];
       else if (url === '/api/runs/combined/series') value = [];
       else if (url.startsWith('/api/runs?')) value = { items: [], total: 0, offset: 0, limit: 20 };
       else if (url === '/api/runs') value = { items: [], total: 0, offset: 0, limit: 20 };
@@ -56,7 +57,7 @@ function setup(t, options = {}) {
     return { ok: status < 400, status, json: async () => value, text: async () => JSON.stringify(value) };
   };
   if (options.config) dom.window.localStorage.setItem('desk-config', JSON.stringify(options.config));
-  for (const file of ['simulation-ui.js', 'optimizer-ui.js', 'app.js']) runInContext(readFileSync(join(__dirname, '../public', file), 'utf8'), dom.getInternalVMContext());
+  for (const file of ['simulation-ui.js', 'optimizer-ui.js', 'charts-ui.js', 'app.js']) runInContext(readFileSync(join(__dirname, '../public', file), 'utf8'), dom.getInternalVMContext());
   const document = dom.window.document;
   const input = (element, value) => { element.value = value; element.dispatchEvent(new dom.window.Event('input', { bubbles: true })); };
   return { dom, document, server, input };
@@ -119,18 +120,30 @@ test('saved advanced settings fill the form and invalid increments prevent launc
   assert.equal(JSON.parse(dom.window.localStorage.getItem('desk-config')).vol, '0.6');
 });
 
-test('histogram uses readable currency labels, the P&L axis, and gold gain bars', async (t) => {
+test('distribution and heatmap account for every path and drill into a range', async (t) => {
   const { dom, document } = setup(t);
   await waitFor(() => document.querySelector('button.run:not(:disabled)'));
-  const svg = dom.window.histogram([{pnl:-285429}, {pnl:195396}, {pnl:1000}]);
-  assert.match(svg, /P&amp;L|P&L/);
-  assert.match(svg, /−\$285k/);
-  assert.match(svg, /#8a6a2f/);
-  assert.doesNotMatch(svg, />day</);
-  const constant = dom.window.histogram([{pnl:0}, {pnl:0}]);
-  assert.doesNotMatch(constant, /NaN|Infinity/);
-});
+  const paths = [
+    { ending_spot: 60, pnl: -285429 },
+    { ending_spot: 60, pnl: 195396 },
+    { ending_spot: 60, pnl: 1000 },
+  ];
+  const histogram = dom.window.histogram(paths).options();
+  assert.equal(histogram.xAxis.name, 'P&L range');
+  assert.equal(histogram.series[1].color, '#a36916');
+  assert.equal(histogram.series[0].data.reduce((total, value) => total + value, 0), 1);
+  assert.equal(histogram.series[1].data.reduce((total, value) => total + value, 0), 2);
+  const constant = dom.window.histogram([{ pnl: 0 }, { pnl: 0 }]).options();
+  assert.equal(constant.xAxis.data[0], '$0.00');
+  assert.equal(constant.series[1].data[0], 2);
 
+  let matching;
+  const heatmap = dom.window.spotPnlHeatmap(paths, (_, matches) => { matching = paths.filter(matches); });
+  const cells = heatmap.options().series[0].data;
+  assert.equal(cells.reduce((total, cell) => total + cell[2], 0), paths.length);
+  heatmap.click({ value: cells[0] });
+  assert.deepEqual(matching, [paths[0]]);
+});
 
 test('rule switches remain usable alongside advanced configuration', async (t) => {
   const { document, dom } = setup(t, { hash: '#/rules' });
@@ -247,4 +260,26 @@ test('paused jobs expose Resume and continue with their checkpoint progress',asy
  const {document,server}=setup(t,{hash:'#/active',jobs:[job]});await waitFor(()=>document.querySelector('.job-control'));
  assert.equal(document.querySelector('.job-control').textContent,'Resume from checkpoint');
  document.querySelector('.job-control').click();await waitFor(()=>server.jobs[0].status==='running');
+});
+
+test('path navigation respects results order and steps through trading days and trades', async (t) => {
+  const paths = [{ path: 2, pnl: -40 }, { path: 8, pnl: 20 }, { path: 15, pnl: 1 }];
+  const days = [0, 1, 2, 3].map((day) => ({
+    day, price: 60 + day, pnl: day - 2, shares: 100,
+    trades: day === 1 ? [{ action: 'buy' }] : [], position: [],
+  }));
+  const { document, dom } = setup(t, {
+    hash: '#/run/combined/path/15?sort=pnl&dir=-1', paths,
+    pathDetails: { 15: { ...paths[2], days }, 8: { ...paths[1], days } },
+  });
+  await waitFor(() => document.querySelector('#book h2')?.textContent === 'Day 3 close');
+  document.querySelector('[data-step="previous-trade"]').click();
+  assert.equal(document.querySelector('#book h2').textContent, 'Day 1 close');
+  assert.equal(document.querySelector('tr[aria-current] td').textContent, '1');
+  document.querySelector('[data-step="next"]').click();
+  assert.equal(document.querySelector('#book h2').textContent, 'Day 2 close');
+  const links = [...document.querySelectorAll('[aria-label="Path navigation"] a')];
+  assert.match(links.find((link) => link.textContent === 'Next path').hash, /path\/2\?/);
+  links.find((link) => link.textContent === 'Previous path').click();
+  await waitFor(() => dom.window.location.hash.includes('/path/8') && document.querySelector('h1')?.textContent === 'Path 8');
 });

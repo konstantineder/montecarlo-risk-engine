@@ -87,16 +87,6 @@ a.ghost { background: #fff; color: var(--accent); border: 1px solid #d9d3ea; }
   color: var(--dim); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px;
   font: 11px/1 ui-monospace, monospace; cursor: pointer; background: #fff;
 }
-.chart-card svg, .modal svg { display: block; width: 100%; max-width: 100%; height: auto; background: transparent; }
-.chart-card > div { min-width: 0; max-width: 100%; }
-.modal {
-  position: fixed; inset: 0; z-index: 20; background: rgba(20, 18, 16, 0.45);
-  display: flex; align-items: center; justify-content: center; padding: 28px;
-}
-.modal .sheet { width: min(1200px, 100%); max-height: calc(100vh - 56px); overflow: auto; background: #fff; border-radius: 14px; padding: 16px 18px; }
-.modal header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.modal h2 { margin: 0; font-size: 18px; }
-.modal button { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: 13px/1 ui-monospace, monospace; cursor: pointer; background: #fff; }
 .grid { min-width: 0; max-width: 100%; max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 table { width: 100%; border-collapse: collapse; font: 12px/1.4 ui-monospace, monospace; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -186,4 +176,67 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 99px; }
   main { padding: 18px 12px 40px; }
   .settings-grid { grid-template-columns: 1fr; }
   .tabs a { padding: 10px 8px; }
+}
+
+.chart-series { display: contents; }
+.chart-card {
+  padding: 16px 18px 12px;
+  border-color: #e1e2eb;
+  box-shadow: 0 2px 6px #22234408;
+}
+.chart-card header { align-items: flex-start; min-height: 46px; }
+.chart-card h3 { font-size: 15px; color: #28243f; }
+.chart-card p { color: #626779; }
+.chart-card button.max { color: #55438f; background: #f6f3ff; border-color: #e7e0fa; padding: 6px 9px; }
+.chart-surface { height: 288px; width: 100%; color: var(--muted); }
+.chart-dialog {
+  width: min(1120px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 24px 72px #201a4140;
+}
+.chart-dialog::backdrop { background: #211c40a6; }
+.chart-dialog header { display: flex; justify-content: space-between; align-items: start; gap: 14px; }
+.chart-dialog h2 { margin: 0; font-size: 20px; }
+.chart-dialog header p { margin: 4px 0 12px; }
+.chart-dialog .chart-surface { height: min(66vh, 720px); }
+.grid { border-color: #e1e2eb; box-shadow: 0 2px 6px #22234408; }
+th, td { padding: 10px 12px; border-color: #eeedf2; }
+th { background: #f6f5fa; color: #55566b; font-weight: 700; cursor: default; }
+th button { display: flex; align-items: center; gap: 6px; }
+th[aria-sort] { color: #504087; }
+th[aria-sort="ascending"] button::after { content: "↑"; }
+th[aria-sort="descending"] button::after { content: "↓"; }
+tbody tr { cursor: default; }
+tbody tr[tabindex] { cursor: pointer; }
+tbody tr:nth-child(even) { background: #faf9fc; }
+tbody tr:hover, tbody tr:focus-visible { background: #f4f0fc; }
+tbody tr.on { background: #ece5fc; }
+.table-value { font-variant-numeric: tabular-nums; }
+.table-value.negative { color: #963341; }
+.table-value.positive { color: #066455; }
+.path-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 13px 0; }
+.path-controls[hidden] { display: none; }
+.path-controls label { display: inline-flex; align-items: center; gap: 8px; }
+.path-controls input[type="number"] { width: 100px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: inherit; }
+.path-controls .ghost { align-self: center; }
+.ghost:disabled { opacity: .48; cursor: default; }
+.day-controls {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #fff;
+  border: 1px solid #e1e2eb;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 2px 10px #22234412;
+}
+.day-controls input { accent-color: var(--accent); }
+.day-controls output { font-variant-numeric: tabular-nums; font-weight: 600; }
+#book, #run-paths { scroll-margin-top: 74px; }
+@media (max-width: 600px) {
+  .chart-surface { height: 254px; }
+  .day-controls { position: static; }
 }

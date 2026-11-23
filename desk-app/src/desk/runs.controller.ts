@@ -56,8 +56,8 @@ export class RunsController {
   }
 
   @Get("runs/:id/paths/:index")
-  path(@Param("id") id: string, @Param("index") index: string) {
-    const row = this.runs.path(id, Number(index));
+  async path(@Param("id") id: string, @Param("index") index: string) {
+    const row = await this.runs.path(id, Number(index));
     if (!row) throw new NotFoundException(`No path ${index} in ${id}`);
     return row;
   }

@@ -38,6 +38,7 @@ export class RunsService {
   private readonly repo: string;
   private readonly queue: SimulationQueue;
   readonly optimizer: OptimizationService;
+  private readonly pathCache = new Map<string, { stamp: number; value: any }>();
   private readonly memory = new Map<string, { stamp: number; value: any }>();
   private listStamp = 0;
   private listCards: RunCard[] | null = null;
@@ -145,12 +146,19 @@ export class RunsService {
     if (!existsSync(file) || Number.isNaN(index)) return null;
     const stamp = statSync(file).mtimeMs;
     const key = `path:${id}:${index}`;
-    const cached = this.memory.get(key);
-    if (cached && cached.stamp === stamp) return Promise.resolve(cached.value);
+    const cached = this.pathCache.get(key);
+    this.pathCache.delete(key);
+    if (cached && cached.stamp === stamp) {
+      this.pathCache.set(key, cached);
+      return Promise.resolve(cached.value);
+    }
     return this.ensureMeta(id).then((meta) => {
       const offset = meta?.offsets?.[String(index)];
       const row = offset == null ? null : this.readAt(file, offset);
-      if (row) this.memory.set(key, { stamp, value: row });
+      if (row) {
+        if (this.pathCache.size >= 16) this.pathCache.delete(this.pathCache.keys().next().value!);
+        this.pathCache.set(key, { stamp, value: row });
+      }
       return row;
     });
   }

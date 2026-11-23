@@ -20,7 +20,10 @@ async function get(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
-  if (url.startsWith("/api/runs/")) cache.set(url, data);
+  if (url.startsWith("/api/runs/") && !/\/paths\/\d+$/.test(url)) {
+    if (cache.size >= 24) cache.delete(cache.keys().next().value);
+    cache.set(url, data);
+  }
   return data;
 }
 
@@ -55,132 +58,27 @@ function table(headers, rows, onClick) {
       const td = document.createElement("td");
       td.textContent = text;
       if (headers[j] === "Trades") td.className = "trades";
+      if (["P&L", "MTM", "Drawdown", "Mean P&L", "Median P&L"].includes(headers[j])) {
+        td.classList.add("table-value");
+        if (/^[-−]\$/.test(text)) td.classList.add("negative");
+        else if (/^\$/.test(text) && text !== "$0") td.classList.add("positive");
+      }
       tr.append(td);
     });
-    if (onClick) tr.addEventListener("click", () => onClick(i, tr));
+    if (onClick) {
+      tr.tabIndex = 0;
+      tr.addEventListener("click", () => onClick(i, tr));
+      tr.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onClick(i, tr);
+      });
+    }
     body.append(tr);
   });
   el.append(head, body);
   grid.append(el);
   return grid;
-}
-
-function frame(width, height, left, right, top, bottom, xMin, xMax, yMin, yMax, yLabel, xLabel = "day", xFormat = Math.round) {
-  let grid = "";
-  for (let i = 0; i < 5; i++) {
-    const value = yMin + ((yMax - yMin) * i) / 4;
-    const yy = top + (1 - i / 4) * (height - top - bottom);
-    grid += `<line x1="${left}" y1="${yy.toFixed(1)}" x2="${width - right}" y2="${yy.toFixed(1)}" stroke="#eeeae4"/>`;
-    grid += `<text x="${left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="#8a837c" font-size="11" font-family="ui-monospace,monospace">${yLabel(value)}</text>`;
-  }
-  const ticks = 6;
-  for (let i = 0; i < ticks; i++) {
-    const day = xMin + ((xMax - xMin) * i) / (ticks - 1);
-    const xx = left + (i / (ticks - 1)) * (width - left - right);
-    grid += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${height - bottom}" stroke="#f3f0eb"/>`;
-    grid += `<text x="${xx.toFixed(1)}" y="${height - 22}" text-anchor="middle" fill="#8a837c" font-size="11" font-family="ui-monospace,monospace">${xFormat(day)}</text>`;
-  }
-  grid += `<text x="${(left + width - right) / 2}" y="${height - 4}" text-anchor="middle" fill="#b0a89f" font-size="10" font-family="ui-monospace,monospace">${xLabel}</text>`;
-  return { grid, x: (day) => left + ((day - xMin) / (xMax - xMin || 1)) * (width - left - right), y: (v) => top + (1 - (v - yMin) / (yMax - yMin || 1)) * (height - top - bottom) };
-}
-
-function bandChart(rows, lowKey, midKey, highKey, opts = {}) {
-  const width = 720, height = 280, left = 78, right = 16, top = 16, bottom = 36;
-  const lows = rows.map((d) => d[lowKey]), mids = rows.map((d) => d[midKey]), highs = rows.map((d) => d[highKey]);
-  let y0 = Math.min(...lows), y1 = Math.max(...highs);
-  if (opts.zero) { y0 = Math.min(y0, 0); y1 = Math.max(y1, 0); }
-  const span = y1 - y0 || 1;
-  y0 -= span * 0.06; y1 += span * 0.06;
-  const last = rows[rows.length - 1].day || 1;
-  const f = frame(width, height, left, right, top, bottom, 0, last, y0, y1, opts.money ? money : (v) => v.toFixed(1));
-  const upper = rows.map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[highKey]).toFixed(1)}`).join(" ");
-  const lower = rows.slice().reverse().map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[lowKey]).toFixed(1)}`).join(" ");
-  const mid = rows.map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[midKey]).toFixed(1)}`).join(" ");
-  const zero = opts.zero && y0 <= 0 && y1 >= 0
-    ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
-    : "";
-  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polygon points="${upper} ${lower}" fill="#5b4b8a" opacity="0.12"/><polyline points="${mid}" fill="none" stroke="#5b4b8a" stroke-width="1.8"/></svg>`;
-}
-
-function multiChart(rows, series, opts = {}) {
-  const width = 720, height = 280, left = 78, right = 16, top = 28, bottom = 36;
-  const all = [0];
-  series.forEach((s) => rows.forEach((r) => all.push(r[s.key])));
-  let y0 = Math.min(...all), y1 = Math.max(...all);
-  if (y1 === y0) y1 += 1;
-  const span = y1 - y0 || 1;
-  y0 -= span * 0.06; y1 += span * 0.08;
-  const last = rows[rows.length - 1].day || 1;
-  const f = frame(width, height, left, right, top, bottom, 0, last, y0, y1, opts.money ? money : (v) => String(Math.round(v)));
-  let legend = "";
-  series.forEach((s, i) => {
-    const x0 = left + i * 150;
-    legend += `<line x1="${x0}" y1="12" x2="${x0 + 18}" y2="12" stroke="${s.color}" stroke-width="2"/>`;
-    legend += `<text x="${x0 + 24}" y="16" fill="#6b6560" font-size="11" font-family="ui-monospace,monospace">${s.label}</text>`;
-  });
-  const lines = series.map((s) => {
-    const points = rows.map((r) => `${f.x(r.day).toFixed(1)},${f.y(r[s.key]).toFixed(1)}`).join(" ");
-    return `<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="1.8"/>`;
-  }).join("");
-  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${legend}${lines}</svg>`;
-}
-function chart(days, key, opts = {}) {
-  const ordered = days.slice().sort((a, b) => a.day - b.day);
-  const width = 720, height = 280, left = 78, right = 16, top = 16, bottom = 36;
-  const values = ordered.map((d) => d[key]);
-  let low = Math.min(...values), high = Math.max(...values);
-  if (opts.zero) { low = Math.min(low, 0); high = Math.max(high, 0); }
-  const span = high - low || 1;
-  low -= span * 0.06; high += span * 0.06;
-  const last = ordered[ordered.length - 1].day || 1;
-  const f = frame(width, height, left, right, top, bottom, 0, last, low, high, opts.money ? money : (v) => v.toFixed(1));
-  const line = ordered.map((d) => `${f.x(d.day).toFixed(1)},${f.y(d[key]).toFixed(1)}`).join(" ");
-  const dots = ordered.filter((d) => d.trades && d.trades.length).map((d) =>
-    `<circle cx="${f.x(d.day).toFixed(1)}" cy="${f.y(d[key]).toFixed(1)}" r="3.2" fill="#f3efe4"/>`
-  ).join("");
-  const zero = opts.zero && low <= 0 && high >= 0
-    ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
-    : "";
-  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}<polyline points="${line}" fill="none" stroke="#5b4b8a" stroke-width="1.8"/>${dots}</svg>`;
-}
-
-function linesChart(days, series) {
-  const ordered = days.slice().sort((a, b) => a.day - b.day);
-  const counts = ordered.map(bookCounts);
-  const width = 1040, height = 260, left = 78, right = 16, top = 28, bottom = 32;
-  const all = [0];
-  series.forEach((s) => counts.forEach((c) => all.push(c[s.key])));
-  let low = Math.min(...all), high = Math.max(...all);
-  if (high === low) high += 1;
-  const span = high - low || 1;
-  low -= span * 0.06; high += span * 0.08;
-  const last = ordered[ordered.length - 1].day || 1;
-  const x = (day) => left + (day / last) * (width - left - right);
-  const y = (v) => top + (1 - (v - low) / (high - low)) * (height - top - bottom);
-  let grid = "";
-  for (let i = 0; i < 5; i++) {
-    const value = low + ((high - low) * i) / 4;
-    const yy = y(value);
-    grid += `<line x1="${left}" y1="${yy.toFixed(1)}" x2="${width - right}" y2="${yy.toFixed(1)}" stroke="#3a342b"/>`;
-    grid += `<text x="${left - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${Math.round(value)}</text>`;
-  }
-  for (let i = 0; i < 6; i++) {
-    const day = Math.round((last * i) / 5);
-    const xx = x(day);
-    grid += `<line x1="${xx.toFixed(1)}" y1="${top}" x2="${xx.toFixed(1)}" y2="${height - bottom}" stroke="#2a261f"/>`;
-    grid += `<text x="${xx.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="#9c9486" font-size="11" font-family="ui-monospace,monospace">${day}</text>`;
-  }
-  let legend = "";
-  series.forEach((s, i) => {
-    const x0 = left + i * 170;
-    legend += `<line x1="${x0}" y1="12" x2="${x0 + 22}" y2="12" stroke="${s.color}" stroke-width="2"/>`;
-    legend += `<text x="${x0 + 28}" y="16" fill="#c8c0b4" font-size="12" font-family="ui-monospace,monospace">${s.label}</text>`;
-  });
-  const lines = series.map((s) => {
-    const points = ordered.map((d, i) => `${x(d.day).toFixed(1)},${y(counts[i][s.key]).toFixed(1)}`).join(" ");
-    return `<polyline points="${points}" fill="none" stroke="${s.color}" stroke-width="1.8"/>`;
-  }).join("");
-  return `<svg viewBox="0 0 ${width} ${height}">${grid}${legend}${lines}</svg>`;
 }
 
 function putStrikes(day) {
@@ -203,83 +101,17 @@ function bookCounts(day) {
   return { shares: shares / 100, puts, shortCalls, shortPuts };
 }
 
-function scatter(rows) {
-  const width = 720, height = 280, left = 78, right = 16, top = 16, bottom = 36;
-  const sample = rows.length > 2000 ? rows.filter((_, i) => i % Math.ceil(rows.length / 2000) === 0) : rows;
-  const xs = sample.map((r) => r.ending_spot), ys = sample.map((r) => r.pnl);
-  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys, 0), y1 = Math.max(...ys, 0);
-  const sx = x1 - x0 || 1, sy = y1 - y0 || 1;
-  x0 -= sx * 0.06; x1 += sx * 0.06; y0 -= sy * 0.06; y1 += sy * 0.06;
-  const f = frame(width, height, left, right, top, bottom, x0, x1, y0, y1, money, "Ending spot ($)", (v) => v.toFixed(1));
-  const dots = sample.map((r) =>
-    `<a href="#/run/${state.run}/path/${r.path}"><circle cx="${f.x(r.ending_spot).toFixed(1)}" cy="${f.y(r.pnl).toFixed(1)}" r="3" fill="${r.pnl < 0 ? "#a33b32" : "#5b4b8a"}"><title>Path ${r.path} ${money(r.pnl)}</title></circle></a>`
-  ).join("");
-  const zero = y0 <= 0 && y1 >= 0
-    ? `<line x1="${left}" y1="${f.y(0).toFixed(1)}" x2="${width - right}" y2="${f.y(0).toFixed(1)}" stroke="#8a8172" stroke-dasharray="3 4"/>`
-    : "";
-  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${zero}${dots}</svg>`;
-}
-
-function histogram(rows) {
-  const values = rows.map((r) => r.pnl);
-  const bins = 18;
-  let low = Math.min(...values), high = Math.max(...values);
-  if (low === high) { low -= 0.5; high += 0.5; }
-  const span = high - low;
-  const counts = Array(bins).fill(0);
-  values.forEach((v) => {
-    const i = Math.min(bins - 1, Math.floor(((v - low) / span) * bins));
-    counts[i] += 1;
-  });
-  const max = Math.max(...counts, 1);
-  const width = 720, height = 300, left = 52, right = 44, top = 16, bottom = 44;
-  const compactMoney = (v) => `${v < 0 ? "−" : ""}$${Math.abs(v) >= 1000 ? `${(Math.abs(v) / 1000).toFixed(0)}k` : Math.abs(v).toFixed(0)}`;
-  const f = frame(width, height, left, right, top, bottom, low, high, 0, max, (v) => String(Math.round(v)), "P&L ($)", compactMoney);
-  const bw = (width - left - right) / bins;
-  let bars = "";
-  counts.forEach((c, i) => {
-    const h = (c / max) * (height - top - bottom);
-    const x = left + i * bw;
-    const y = height - bottom - h;
-    const mid = low + ((i + 0.5) / bins) * span;
-    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${mid < 0 ? "#a33b32" : "#8a6a2f"}" opacity="0.8"><title>${money(mid)} · ${c} paths</title></rect>`;
-  });
-  return `<svg viewBox="0 0 ${width} ${height}">${f.grid}${bars}</svg>`;
-}
-
-function chartCard(title, note, svg) {
-  const card = document.createElement("article");
-  card.className = "chart-card";
-  const head = document.createElement("header");
-  const text = document.createElement("div");
-  text.innerHTML = `<h3>${title}</h3><p>${note}</p>`;
-  const btn = document.createElement("button");
-  btn.className = "max";
-  btn.textContent = "Maximize";
-  btn.addEventListener("click", () => maximize(title, note, svg));
-  head.append(text, btn);
-  const body = document.createElement("div");
-  body.innerHTML = svg;
-  card.append(head, body);
-  return card;
-}
-
-function maximize(title, note, svg) {
-  const modal = document.createElement("div");
-  modal.className = "modal";
-  modal.innerHTML = `<div class="sheet"><header><div><h2>${title}</h2><p class="note">${note}</p></div><button>Close</button></header>${svg}</div>`;
-  modal.querySelector("button").addEventListener("click", () => modal.remove());
-  modal.addEventListener("click", (event) => { if (event.target === modal) modal.remove(); });
-  document.body.append(modal);
-}
-
-const state = { run: null, path: null, day: null, view: 0 };
+const state = { run: null, path: null, view: 0 };
+let pathSelection;
+let pathOrderCache;
 
 async function route() {
   state.view++;
+  disposeCharts();
   if (stopJobsPolling) { stopJobsPolling(); stopJobsPolling = null; }
-  const hash = location.hash.replace(/^#/, "") || "/";
+  const [hash, query] = (location.hash.replace(/^#/, "") || "/").split("?");
   const parts = hash.split("/").filter(Boolean);
+  const params = new URLSearchParams(query);
   crumb.textContent = "";
   document.querySelectorAll(".nav a").forEach((link) => {
     link.classList.toggle("on", link.getAttribute("href") === `#/${parts[0] || ""}`.replace("#//", "#/"));
@@ -290,8 +122,8 @@ async function route() {
   if (parts[0] === "saved") return showHome(true);
   if (parts[0] === "optimize") return showOptimizerForm(parts[1], Number(parts[2]));
   if (parts[0] === "optimizer") return showOptimizerResult(parts[1]);
-  if (parts[0] === "run" && parts[2] === "path") return showPath(parts[1], Number(parts[3]));
-  if (parts[0] === "run") return showRun(parts[1]);
+  if (parts[0] === "run" && parts[2] === "path") return showPath(parts[1], Number(parts[3]), params);
+  if (parts[0] === "run") return showRun(parts[1], params);
   return showHome();
 }
 
@@ -481,7 +313,7 @@ async function showHome(savedOnly = false) {
   await load();
 }
 
-async function showRun(id) {
+async function showRun(id, params) {
   const view = state.view;
   state.run = id;
   crumb.innerHTML = `<a href="#/">Simulations</a> / <span>${id}</span>`;
@@ -500,15 +332,27 @@ async function showRun(id) {
   h.textContent = combined ? `Combined simulation · ${cfg.configuration_count} configurations` : `${cfg.strategy || "wheel"} · ${cfg.lots || ""} lots`;
   const lede = document.createElement("p");
   lede.className = "lede";
-  lede.textContent = combined ? `${when(run.created)} · ${mc.paths} pooled paths · horizons ${cfg.horizon_range.join("–")}d. One P&L distribution across all configurations. Each path retains its own settings.` : `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d. Maximize any chart. Click a point or a row for the path.`;
-  app.append(h, lede, exportBar(id));
+  lede.textContent = combined ? `${when(run.created)} · ${mc.paths} pooled paths · horizons ${cfg.horizon_range.join("–")}d` : `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d`;
+  const actions = exportBar(id);
+  const explore = document.createElement("button");
+  explore.className = "ghost";
+  explore.textContent = "Explore paths";
+  explore.addEventListener("click", () => {
+    const pathsHeading = document.querySelector("#run-paths");
+    pathsHeading.focus({ preventScroll: true });
+    pathsHeading.scrollIntoView?.({ block: "start" });
+  });
+  actions.append(explore);
+  app.append(h, lede, actions);
   const optimizeLink = document.createElement("a"); optimizeLink.className = "ghost";
+  const configurations = new Map((run.configurations || []).map((group) => [group.id, group.config]));
   const excessHold = (path) => {
-    const own = run.configurations?.find(g => g.id === path.configuration)?.config || cfg;
+    const own = configurations.get(path.configuration) || cfg;
     return path.pnl - (path.ending_spot - own.spot) * own.lots * 100;
   };
   const worst = paths.reduce((a,b) => excessHold(a) < excessHold(b) ? a : b, paths[0]);
-  optimizeLink.href = `#/optimize/${id}/${worst?.path ?? 0}`; optimizeLink.textContent = "Optimize weakest path versus stock"; app.append(optimizeLink);
+  optimizeLink.href = `#/optimize/${id}/${worst?.path ?? 0}`; optimizeLink.textContent = "Optimize weakest path versus stock";
+  if (worst) app.append(optimizeLink);
   if (run.analysis) app.append(replayComparison(run.analysis));
   app.append(facts([
     ["Median P&L", money(mc.median)],
@@ -542,9 +386,17 @@ async function showRun(id) {
       reread.disabled = false;
     }
   });
-  if (combined) app.append(combinedConfigurations(run, paths), reread, status);
-  else app.append(rulesTitle, rulesNote, ruleSnapshot(run.rules), reread, status);
-
+  const openPath = (path) => { location.hash = `#/run/${id}/path/${path}`; };
+  let selectedBin = params.has("bin") && pathSelection?.run === id ? pathSelection : undefined;
+  const selectBin = (label, matches) => {
+    selectedBin = { label, matches };
+    filter.value = "";
+    page = 0;
+    draw();
+    chartModal?.close();
+    pathTitle.focus({ preventScroll: true });
+    pathTitle.scrollIntoView?.({ block: "start" });
+  };
   const grid = document.createElement("div");
   grid.className = "chart-grid";
   const ribbon = run.ribbon || [];
@@ -556,8 +408,7 @@ async function showRun(id) {
     );
   }
   const seriesHost = document.createElement("div");
-  seriesHost.className = "chart-grid";
-  grid.append(seriesHost);
+  seriesHost.className = "chart-series";
   get(`/api/runs/${id}/series`).then((series) => {
     if (view !== state.view || !series?.length) return;
     seriesHost.append(
@@ -582,10 +433,15 @@ async function showRun(id) {
     );
   }).catch(() => undefined);
   grid.append(
-    chartCard("Where paths landed", "Horizontal is ending spot, vertical is P&L. Click a point.", scatter(paths)),
-    chartCard("P&L distribution", "Brick is a loss. Gold is a gain. Left axis is the path count.", histogram(paths)),
+    chartCard("Where paths landed", paths.length > 2500 ? "Sampled paths and extremes. Select a point to open its path." : "Select a point to open its path.", scatter(paths, openPath)),
+    chartCard("Spot ranges × P&L", "Each cell counts all paths in that spot and P&L range. Select a cell to explore its paths.", spotPnlHeatmap(paths, selectBin)),
+    chartCard("P&L distribution", "Select a bar to filter paths by P&L range.", histogram(paths, selectBin)),
+    chartCard("Drawdown vs. final P&L", "Compare the largest interim drawdown with the final result. Select a point to open its path.", scatter(paths, openPath, "max_dd", "Maximum drawdown")),
   );
+  grid.append(seriesHost);
   app.append(grid);
+  if (combined) app.append(combinedConfigurations(run, paths), reread, status);
+  else app.append(rulesTitle, rulesNote, ruleSnapshot(run.rules), reread, status);
 
   const legs = [...(book.puts || []), ...(book.calls || [])];
   if (legs.length) {
@@ -598,16 +454,34 @@ async function showRun(id) {
   }
 
   const pathTitle = document.createElement("h2");
+  pathTitle.id = "run-paths";
+  pathTitle.tabIndex = -1;
   pathTitle.textContent = "Paths";
   const note = document.createElement("p");
   note.className = "note";
-  note.textContent = "Sorted by P&L. Click a row for the day-by-day book.";
-  app.append(pathTitle, note);
-  let key = "pnl", dir = -1;
+  note.textContent = "Select a column to sort or open any path by ID.";
+  const jump = document.createElement("form");
+  jump.className = "path-controls";
+  jump.innerHTML = '<label>Path ID <input type="number" min="0" step="1" required></label><button class="ghost">Open path</button><span class="note" role="status"></span>';
+  const pathIds = new Set(paths.map((row) => row.path));
+  jump.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const index = jump.querySelector("input").valueAsNumber;
+    if (pathIds.has(index)) openPath(index);
+    else jump.querySelector("[role=status]").textContent = "No path with that ID.";
+  });
+  const activeBin = document.createElement("div");
+  activeBin.className = "path-controls";
+  activeBin.hidden = true;
+  app.append(pathTitle, note, jump, activeBin);
+  const columns = ["path", ...(combined ? ["configuration"] : []), "ending_spot", "pnl", "min_spot", "max_dd", "ending_shares", "trades"];
+  let key = columns.includes(params.get("sort")) ? params.get("sort") : "pnl";
+  let dir = params.get("dir") === "1" ? 1 : -1;
   const filter = document.createElement("select");
   if (combined) {
     filter.setAttribute("aria-label", "Path configuration");
     filter.innerHTML = '<option value="">All configurations</option>' + (run.configurations || []).map((g) => `<option value="${g.id}">Configuration ${g.id}</option>`).join("");
+    filter.value = params.get("config") || "";
     app.append(filter);
   }
   const host = document.createElement("div");
@@ -616,58 +490,71 @@ async function showRun(id) {
   app.append(host, pager);
   let page = 0;
   const pageSize = 100;
-  const draw = () => {
-    const ordered = paths.filter((p) => !combined || !filter.value || p.configuration === Number(filter.value)).sort((a, b) => (a[key] - b[key]) * dir);
+  let ordered;
+  const draw = (reuseOrder = false) => {
+    if (!reuseOrder) ordered = paths.filter((path) =>
+      (!combined || !filter.value || path.configuration === Number(filter.value)) &&
+      (!selectedBin || selectedBin.matches(path))
+    ).sort((a, b) => (a[key] - b[key]) * dir || a.path - b.path);
+    activeBin.hidden = !selectedBin;
+    if (selectedBin) {
+      const label = document.createElement("strong");
+      label.textContent = selectedBin.label;
+      const clear = document.createElement("button");
+      clear.className = "ghost";
+      clear.textContent = "Clear chart filter";
+      clear.addEventListener("click", () => { selectedBin = undefined; page = 0; draw(); });
+      activeBin.replaceChildren(label, clear);
+    }
     const pages = Math.max(1, Math.ceil(ordered.length / pageSize));
     page = Math.min(page, pages - 1);
     const slice = ordered.slice(page * pageSize, (page + 1) * pageSize);
     host.replaceChildren(table(
       ["Index", ...(combined ? ["Configuration"] : []), "Spot", "P&L", "Min spot", "Drawdown", "Shares", "Trades"],
       slice.map((r) => [String(r.path), ...(combined ? [String(r.configuration)] : []), px(r.ending_spot), money(r.pnl), px(r.min_spot), money(r.max_dd), String(r.ending_shares), String(r.trades)]),
-      (i) => { location.hash = `#/run/${id}/path/${slice[i].path}`; }
+      (i) => {
+        const params = new URLSearchParams({ sort: key, dir });
+        if (filter.value) params.set("config", filter.value);
+        if (selectedBin) {
+          pathSelection = { run: id, ...selectedBin };
+          params.set("bin", "1");
+        }
+        location.hash = `#/run/${id}/path/${slice[i].path}?${params}`;
+      }
     ));
     host.querySelectorAll("th").forEach((th, i) => {
-      const map = ["path", ...(combined ? ["configuration"] : []), "ending_spot", "pnl", "min_spot", "max_dd", "ending_shares", "trades"];
-      th.addEventListener("click", () => {
-        dir = key === map[i] ? dir * -1 : (map[i] === "path" ? 1 : -1);
-        key = map[i];
+      const button = document.createElement("button");
+      button.textContent = th.textContent;
+      if (key === columns[i]) th.setAttribute("aria-sort", dir === 1 ? "ascending" : "descending");
+      button.addEventListener("click", () => {
+        dir = key === columns[i] ? dir * -1 : (columns[i] === "path" ? 1 : -1);
+        key = columns[i];
         page = 0;
         draw();
+        host.querySelectorAll("th button")[i].focus();
       });
+      th.replaceChildren(button);
     });
     pager.innerHTML = "";
     const label = document.createElement("span");
     label.className = "note";
-    label.textContent = `${ordered.length} paths · ${page * pageSize + 1}–${Math.min(ordered.length, (page + 1) * pageSize)}`;
+    label.setAttribute("role", "status");
+    label.textContent = ordered.length ? `${ordered.length.toLocaleString()} paths · ${page * pageSize + 1}–${Math.min(ordered.length, (page + 1) * pageSize)}` : "No matching paths";
     const prev = document.createElement("button");
     prev.className = "ghost";
     prev.textContent = "Previous";
     prev.disabled = page === 0;
-    prev.addEventListener("click", () => { page -= 1; draw(); });
+    prev.addEventListener("click", () => { page -= 1; draw(true); });
     const next = document.createElement("button");
     next.className = "ghost";
     next.textContent = "Next";
     next.disabled = page >= pages - 1;
-    next.addEventListener("click", () => { page += 1; draw(); });
+    next.addEventListener("click", () => { page += 1; draw(true); });
     pager.append(label, prev, next);
   };
   filter.addEventListener("change", () => { page = 0; draw(); });
   draw();
-}
-
-function ribbonChart(ribbon) {
-  const width = 1040, height = 240, left = 78, right = 16, top = 16, bottom = 32;
-  const lows = ribbon.map((d) => d.spot_p05), mids = ribbon.map((d) => d.spot_p50), highs = ribbon.map((d) => d.spot_p95);
-  let low = Math.min(...lows), high = Math.max(...highs);
-  const span = high - low || 1;
-  low -= span * 0.06; high += span * 0.06;
-  const last = ribbon[ribbon.length - 1].day || 1;
-  const x = (day) => left + (day / last) * (width - left - right);
-  const y = (v) => top + (1 - (v - low) / (high - low)) * (height - top - bottom);
-  const band = ribbon.map((d) => `${x(d.day).toFixed(1)},${y(d.spot_p95).toFixed(1)}`).join(" ")
-    + " " + ribbon.slice().reverse().map((d) => `${x(d.day).toFixed(1)},${y(d.spot_p05).toFixed(1)}`).join(" ");
-  const mid = ribbon.map((d) => `${x(d.day).toFixed(1)},${y(d.spot_p50).toFixed(1)}`).join(" ");
-  return `<svg viewBox="0 0 ${width} ${height}"><polygon points="${band}" fill="#e6d3a3" opacity="0.18"/><polyline points="${mid}" fill="none" stroke="#e6d3a3" stroke-width="1.8"/></svg>`;
+  if (params.has("paths")) pathTitle.scrollIntoView?.({ block: "start" });
 }
 
 function tradeText(trades) {
@@ -679,14 +566,18 @@ function tradeText(trades) {
   }).join("; ");
 }
 
-async function showPath(id, index) {
+async function showPath(id, index, params) {
   const view = state.view;
   state.run = id;
   state.path = index;
   crumb.innerHTML = `<a href="#/">Simulations</a> / <a href="#/run/${id}">${id}</a> / <span>Path ${index}</span>`;
   app.innerHTML = "<p class='lede'>Loading the path…</p>";
-  const row = await get(`/api/runs/${id}/paths/${index}`);
+  const [row, paths] = await Promise.all([
+    get(`/api/runs/${id}/paths/${index}`),
+    get(`/api/runs/${id}/paths`),
+  ]);
   if (view !== state.view) return;
+  if (!row) throw new Error("Path unavailable.");
   const days = row.days || [];
   app.innerHTML = "";
   const h = document.createElement("h1");
@@ -706,50 +597,141 @@ async function showPath(id, index) {
   ]));
   const optimizeLink = document.createElement("a"); optimizeLink.className = "ghost"; optimizeLink.href = `#/optimize/${id}/${index}`; optimizeLink.textContent = "Optimize this path";
   app.append(optimizeLink);
+  const pathOrder = ["path", "configuration", "ending_spot", "pnl", "min_spot", "max_dd", "ending_shares", "trades"];
+  const sortKey = pathOrder.includes(params.get("sort")) ? params.get("sort") : "path";
+  const sortDir = params.get("dir") === "-1" ? -1 : 1;
+  const bin = params.has("bin") && pathSelection?.run === id ? pathSelection : undefined;
+  const configuration = params.get("config");
+  const orderKey = JSON.stringify([id, sortKey, sortDir, configuration]);
+  if (pathOrderCache?.key !== orderKey || pathOrderCache.paths !== paths || pathOrderCache.bin !== bin) {
+    const ids = paths.filter((path) => (!configuration || String(path.configuration) === configuration) &&
+      (!bin || bin.matches(path))).sort((a, b) => (a[sortKey] - b[sortKey]) * sortDir || a.path - b.path).map((path) => path.path);
+    pathOrderCache = { key: orderKey, paths, bin, ids, positions: new Map(ids.map((path, i) => [path, i])) };
+  }
+  const { ids: navPaths, positions } = pathOrderCache;
+  const navIndex = positions.get(index) ?? -1;
+  const nav = document.createElement("nav");
+  nav.className = "path-controls";
+  nav.setAttribute("aria-label", "Path navigation");
+  const link = (label, href) => {
+    const control = document.createElement(href ? "a" : "button");
+    control.className = "ghost";
+    control.textContent = label;
+    if (href) control.href = href;
+    else control.disabled = true;
+    return control;
+  };
+  const destination = (path) => path == null ? null : `#/run/${id}/path/${path}?${params}`;
+  const back = new URLSearchParams(params);
+  back.set("paths", "1");
+  const position = document.createElement("span");
+  position.textContent = navIndex >= 0 ? `${navIndex + 1} of ${navPaths.length} paths` : `Path ${index}`;
+  nav.append(link("Previous path", destination(navPaths[navIndex - 1])), position,
+    link("Next path", destination(navIndex === -1 ? null : navPaths[navIndex + 1])),
+    link("All paths", `#/run/${id}?${back}`));
+  app.append(nav);
+  if (!days.length) return;
   const initialShares = (row.config?.lots || 0) * 100 || days[0]?.position?.find((leg) => leg.name === "share")?.qty || 0;
   const holdPnl = initialShares * (days[days.length - 1].price - days[0].price);
   app.append(facts([["Stock-only P&L", money(holdPnl)], ["P&L above holding stock", money(row.pnl - holdPnl)]]));
+  let dayIndex = days.length - 1;
+  let selected = days[dayIndex];
+  const dayIndices = new Map(days.map((day, i) => [day.day, i]));
+  const tradeIndices = days.flatMap((day, i) => day.trades?.length ? [i] : []);
+  const controls = document.createElement("div");
+  controls.className = "path-controls day-controls";
+  controls.innerHTML = `<button class="ghost" data-step="previous-trade">Previous trade</button>
+    <button class="ghost" data-step="previous">Previous day</button>
+    <label>Trading day <input type="range" min="0" max="${days.length - 1}" value="${dayIndex}"></label>
+    <output aria-live="polite"></output>
+    <button class="ghost" data-step="next">Next day</button>
+    <button class="ghost" data-step="next-trade">Next trade</button>
+    <button class="ghost" data-step="book">View day book</button>`;
+  const slider = controls.querySelector("input");
+  const output = controls.querySelector("output");
+  const dayOptions = { day: () => selected.day, selectDay: (day) => selectDay(dayIndices.get(day)) };
   const charts = document.createElement("div");
   charts.className = "chart-grid";
-  const cover = days.map((d) => ({ day: d.day, spot: d.price, ...bookCounts(d), ...putStrikes(d) }));
+  let peak = -Infinity;
+  const cover = days.map((d) => {
+    peak = Math.max(peak, d.pnl);
+    return {
+      ...d, spot: d.price, tradeSpot: d.trades?.length ? d.price : null,
+      stockHold: initialShares * (d.price - days[0].price), drawdown: d.pnl - peak,
+      ...bookCounts(d), ...putStrikes(d),
+    };
+  });
   charts.append(
-    chartCard("Spot", "Left is the price. Dots are trade days.", chart(days, "price")),
-    chartCard("P&L", "Dashed line is zero.", chart(days, "pnl", { zero: true, money: true })),
-    chartCard("Mark to market", "Cash plus the marks on shares and options.", chart(days, "mtm", { money: true })),
+    chartCard("Spot", "Select a day on the chart to inspect its book. Gold dots mark trades.", multiChart(cover, [
+      { key: "spot", label: "Spot", color: chartColors.accent },
+      { key: "tradeSpot", label: "Trade day", type: "scatter", color: chartColors.gain },
+    ], dayOptions)),
+    chartCard("P&L vs. holding shares", "Compare strategy P&L with a stock-only position on the same prices.", multiChart(cover, [
+      { key: "pnl", label: "Strategy", color: chartColors.accent },
+      { key: "stockHold", label: "Stock only", color: "#248080" },
+    ], { ...dayOptions, zero: true, money: true })),
+    chartCard("Mark to market", "Cash plus marks on shares and options.", multiChart(cover, [
+      { key: "mtm", label: "Mark to market", color: chartColors.accent },
+    ], { ...dayOptions, money: true })),
+    chartCard("Drawdown over time", "P&L below its running peak, starting at day zero.", multiChart(cover, [
+      { key: "drawdown", label: "Drawdown", color: chartColors.loss, areaStyle: { opacity: 0.12 } },
+    ], { ...dayOptions, zero: true, money: true })),
     chartCard("Cover", "Shares ÷ 100 against the long puts. They should stay near each other.", multiChart(cover, [
       { key: "shares", color: "#5b4b8a", label: "shares ÷ 100" },
       { key: "puts", color: "#3d6b4f", label: "long puts" },
-    ])),
+    ], dayOptions)),
     chartCard("Put strike", "Spot against the floor and the average long put. A step up is the roll.", multiChart(cover, [
       { key: "spot", color: "#8a837c", label: "spot" },
       { key: "floor", color: "#3d6b4f", label: "floor strike" },
       { key: "avg", color: "#5b4b8a", label: "average strike" },
-    ])),
+    ], dayOptions)),
     chartCard("Short options open", "Calls still sold, and puts sold to get the shares back.", multiChart(cover, [
       { key: "shortCalls", color: "#8a6a2f", label: "short calls" },
       { key: "shortPuts", color: "#a33b32", label: "short puts" },
-    ])),
+    ], dayOptions)),
   );
-  app.append(charts);
+  app.append(controls, charts);
 
   const dayTitle = document.createElement("h2");
   dayTitle.textContent = "Days";
-  app.append(dayTitle);
   const dayHost = document.createElement("div");
   const bookHost = document.createElement("div");
   bookHost.id = "book";
-  app.append(dayHost, bookHost);
-  let selected = days[days.length - 1];
-  const drawDays = () => {
-    dayHost.replaceChildren(table(
-      ["Day", "Spot", "P&L", "Shares", "Trades"],
-      days.map((d) => [String(d.day), px(d.price), money(d.pnl), String(d.shares), tradeText(d.trades)]),
-      (i) => { selected = days[i]; drawDays(); drawBook(); }
-    ));
-    dayHost.querySelectorAll("tbody tr").forEach((tr, i) => {
-      if (days[i].day === selected.day) tr.className = "on";
-    });
+  app.append(bookHost, dayHost);
+  const dayTable = table(
+    ["Day", "Spot", "P&L", "Shares", "Trades"],
+    days.map((d) => [String(d.day), px(d.price), money(d.pnl), String(d.shares), tradeText(d.trades)]),
+    (i) => selectDay(i)
+  );
+  dayHost.append(dayTitle, dayTable);
+  const dayRows = dayTable.querySelectorAll("tbody tr");
+  const previousTrade = () => tradeIndices.findLast((i) => i < dayIndex);
+  const nextTrade = () => tradeIndices.find((i) => i > dayIndex);
+  const selectDay = (i) => {
+    if (!days[i]) return;
+    dayRows[dayIndex].classList.remove("on");
+    dayRows[dayIndex].removeAttribute("aria-current");
+    dayIndex = i;
+    selected = days[i];
+    dayRows[i].classList.add("on");
+    dayRows[i].setAttribute("aria-current", "true");
+    slider.value = i;
+    slider.setAttribute("aria-valuetext", `Day ${selected.day}`);
+    output.textContent = `Day ${selected.day} · ${money(selected.pnl)} P&L · ${selected.trades?.length || 0} trades`;
+    controls.querySelector('[data-step="previous"]').disabled = i === 0;
+    controls.querySelector('[data-step="next"]').disabled = i === days.length - 1;
+    controls.querySelector('[data-step="previous-trade"]').disabled = previousTrade() == null;
+    controls.querySelector('[data-step="next-trade"]').disabled = nextTrade() == null;
+    const surfaces = [...charts.querySelectorAll(".chart-surface"), ...(chartModal?.querySelectorAll(".chart-surface") || [])];
+    for (const surface of surfaces) surface.dispatchEvent(new Event("desk:day"));
+    drawBook();
   };
+  slider.addEventListener("input", () => selectDay(slider.valueAsNumber));
+  controls.querySelector('[data-step="previous"]').addEventListener("click", () => selectDay(dayIndex - 1));
+  controls.querySelector('[data-step="next"]').addEventListener("click", () => selectDay(dayIndex + 1));
+  controls.querySelector('[data-step="previous-trade"]').addEventListener("click", () => selectDay(previousTrade()));
+  controls.querySelector('[data-step="next-trade"]').addEventListener("click", () => selectDay(nextTrade()));
+  controls.querySelector('[data-step="book"]').addEventListener("click", () => bookHost.scrollIntoView?.({ block: "start" }));
   const drawBook = () => {
     bookHost.replaceChildren();
     const title = document.createElement("h2");
@@ -782,8 +764,7 @@ async function showPath(id, index) {
       bookHost.append(details);
     });
   };
-  drawDays();
-  drawBook();
+  selectDay(dayIndex);
 }
 
 function positionTable(rows) {

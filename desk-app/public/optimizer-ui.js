@@ -100,6 +100,7 @@ async function showOptimizerResult(id) {
   const draw=()=>{
     const c=candidate(); details.replaceChildren(facts([["Candidate P&L",money(c.pnl)],["Above stock hold",money(c.excess_hold)],["Improvement over original",money(c.improvement)],["Maximum drawdown",money(c.max_dd)]]));
     const pre=document.createElement("pre");pre.className="configuration-data";pre.textContent=JSON.stringify(c.config,null,2);details.append(pre);
+    chartHost.querySelectorAll(".chart-surface").forEach(disposeChart);
     chartHost.replaceChildren();if(c.id===result.winning_candidate)chartHost.append(chartCard("Best candidate on fitted path","Original strategy, candidate and stock hold on the same prices.",multiChart(result.plot,[{key:"original",label:"original",color:"#a33b32"},{key:"optimized",label:"candidate",color:"#5b4b8a"},{key:"stock_hold",label:"stock only",color:"#8a6a2f"}],{money:true})));
   };
   const action=(selector,work)=>controls.querySelector(selector).addEventListener("click",async event=>{event.target.disabled=true;try{await work();}catch(error){status.textContent=error.message;}finally{event.target.disabled=false;}});
