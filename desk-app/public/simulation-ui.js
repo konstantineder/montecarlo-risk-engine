@@ -63,16 +63,19 @@ async function simulationForm(saveOnly = false) {
       <h3>Rule settings</h3><div class="settings-grid">${schema.scalars.filter((p) => p.group === "Rules").map((p) => field(p.key, p.label)).join("")}${field("putRatioGrid", "Put ratio grid: drop percent:ratio", true)}</div>
       <label class="check"><input type="checkbox" id="enable-ranges"/>Run a parameter sweep</label>
       <div class="range-editor" hidden>
-        <label class="sweep-output">Sweep output<select name="sweepMode"><option value="separate">Separate simulations — one per configuration</option><option value="combined">One combined simulation — all configurations and paths</option></select></label>
-        <p class="note">Choose a start, end and increment for any numeric parameter. Every combination contributes its configured number of paths. Choose separate results or one combined result above. For example, 0.2 to 0.5 in steps of 0.1 gives 4 values; another 3-value range gives 12 configurations. The end is included when an increment reaches it.</p>
+        <p class="note">Choose a start, end and increment for any numeric parameter. Every combination contributes its configured number of paths. Choose combined or separate results with the Results selector beside the Run button. For example, 0.2 to 0.5 in steps of 0.1 gives 4 values; another 3-value range gives 12 configurations. The end is included when an increment reaches it.</p>
         <div class="range-rows"></div><button type="button" class="ghost add-range">Add parameter range</button>
         <p class="note">Up to ${schema.maxSimulations.toLocaleString()} configurations per sweep. Combined mode saves one result and retains the configuration on every path.</p>
       </div>
     </details>
+    <div class="sweep-output full" hidden>
+      <label>Results for parameter ranges<select name="sweepMode"><option value="combined">One combined simulation — all configurations and paths</option><option value="separate">Separate simulations — one per configuration</option></select></label>
+      <p class="note">Combined mode creates one progress tile, one saved result and one P&amp;L distribution for all paths.</p>
+    </div>
     <div class="launch-summary full" role="status"></div>
     <button class="run" type="submit" disabled>${saveOnly ? "Save configuration" : "Run simulation"}</button>`;
   form.elements.strategy.value = cfg.strategy;
-  form.elements.sweepMode.value = cfg.sweepMode || "separate";
+  form.elements.sweepMode.value = cfg.sweepModeVersion === 2 && cfg.sweepMode === "separate" ? "separate" : "combined";
   const advanced = form.querySelector("details");
   const enabled = form.querySelector("#enable-ranges");
   enabled.checked = cfg.sweepEnabled === true;
@@ -115,6 +118,7 @@ async function simulationForm(saveOnly = false) {
   };
   const drawRanges = () => {
     editor.hidden = !enabled.checked;
+    form.querySelector(".sweep-output").hidden = !enabled.checked;
     const parameters = rangeParameters(schema, values());
     rows.replaceChildren();
     ranges.forEach((range, index) => {
@@ -151,7 +155,7 @@ async function simulationForm(saveOnly = false) {
     try {
       const body = payload();
       const result = saveOnly ? await postJson("/api/simulation/preview", body) : await postJson("/api/simulate", body);
-      saveConfig({ ...values(), sweepEnabled: enabled.checked, ranges });
+      saveConfig({ ...values(), sweepEnabled: enabled.checked, ranges, sweepModeVersion: 2 });
       status.textContent = saveOnly ? "Saved. The simulation form will use this configuration and these ranges." : `Queued ${result.mode === "combined" ? `1 combined simulation with ${result.configurationCount} configurations and ${result.totalPaths.toLocaleString()} paths` : `${result.total} simulation${result.total === 1 ? "" : "s"}`}. Follow the progress below or in Active runs.`;
       if (!saveOnly) wrap.dispatchEvent(new CustomEvent("simulation-started", { bubbles: true }));
     } catch (error) { status.textContent = error.message; }
@@ -206,6 +210,30 @@ async function watchJobs(host, includeCompleted = false) {
           summary.className = "note";
           summary.textContent = `${percent.toFixed(1)}% · ${done} of ${group.length} completed${failed ? ` · ${failed} failed` : ""}`;
           section.append(summary, progressBar(percent, "Batch progress"));
+          const combinedJob = jobs.find((job) => job.sourceBatch === batch && job.status !== "error");
+          if (combinedJob?.status === "done" && combinedJob.run) {
+            const link = document.createElement("a");
+            link.className = "ghost";
+            link.href = `#/run/${combinedJob.run}`;
+            link.textContent = "Open combined results";
+            section.append(link);
+          } else if (done === group.length) {
+            const button = document.createElement("button");
+            button.className = "ghost combine-results";
+            button.textContent = combinedJob ? "Combining saved results…" : "Combine completed results";
+            button.disabled = Boolean(combinedJob);
+            button.addEventListener("click", async () => {
+              button.disabled = true;
+              try {
+                await postJson(`/api/jobs/batches/${batch}/combine`, {});
+                await refresh();
+              } catch (error) {
+                button.disabled = false;
+                button.textContent = error.message;
+              }
+            });
+            section.append(button);
+          }
         }
         const cards = document.createElement("div");
         cards.className = "cards job-cards";

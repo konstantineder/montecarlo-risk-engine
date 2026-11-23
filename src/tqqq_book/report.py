@@ -111,7 +111,7 @@ def _slim(paths: list[dict]) -> list[dict]:
     return kept
 
 
-def write_report(result: dict, path: str | Path) -> str:
+def write_report(result: dict, path: str | Path, *, preview_paths: list[dict] | None = None) -> str:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     cfg = result["config"]
@@ -119,7 +119,7 @@ def write_report(result: dict, path: str | Path) -> str:
     mc = result["monte_carlo"]
     ribbon = result["ribbon"]
     vol = result.get("vol") or {}
-    paths = _slim(_load_paths(result))
+    paths = _slim(_load_paths(result) if preview_paths is None else preview_paths)
     selected = (result.get("median_path") or {}).get("path", 0)
     legs = "".join(
         "<tr>"
@@ -727,7 +727,7 @@ renderDays();
         "__DAYS__": str(cfg["path_days"]),
         "__RUN_LABEL__": f"Combined simulation · {cfg['configuration_count']} configurations · {mc['paths']} paths" if combined else f"TQQQ · {cfg['lots']} lots",
         "__CONFIGURATIONS__": f"<section><h2>Configurations</h2>{configurations}</section>" if combined else "",
-        "__NOTE__": result["note"],
+        "__NOTE__": result["note"] + (f" This standalone report previews the median path. All {mc['paths']} paths are available in the desk app and saved paths file." if preview_paths is not None else ""),
         "__VOL__": vol.get("note", ""),
         "__CARDS__": cards,
         "__SPOT__": _band(ribbon, "spot_p05", "spot_p50", "spot_p95"),

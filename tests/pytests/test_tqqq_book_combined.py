@@ -73,3 +73,32 @@ def test_six_configurations_with_one_hundred_paths_save_one_simulation(tmp_path,
     assert len(paths) == 600
     assert len({path["path"] for path in paths}) == 600
     assert Counter(path["configuration"] for path in paths) == {i: 100 for i in range(1, 7)}
+
+
+def test_combine_completed_results_streams_histories_without_resimulation(tmp_path, monkeypatch):
+    import tqqq_book.combined as combined
+    import tqqq_book.report as report
+    from tqqq_book.desk import BookConfig, run
+
+    monkeypatch.setattr(store, "RUNS", tmp_path)
+    first = run(BookConfig(paths=2, horizon_days=2, seed=1))
+    second = run(BookConfig(paths=3, horizon_days=3, seed=2))
+    source_ids = [first["saved"]["id"], second["saved"]["id"]]
+    original = [Path(result["saved"]["paths"]).read_bytes() for result in (first, second)]
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Combining saved results must not simulate or load all histories for a report")
+
+    monkeypatch.setattr(combined, "run", forbidden)
+    monkeypatch.setattr(report, "_load_paths", forbidden)
+    result = combined.combine_saved_runs(source_ids)
+    assert result["config"]["paths"] == 5
+    assert result["config"]["configuration_count"] == 2
+    assert len(store.list_runs()) == 3
+    paths = [json.loads(line) for line in Path(result["saved"]["paths"]).read_text().splitlines()]
+    assert [path["path"] for path in paths] == list(range(5))
+    assert Counter(path["source_run"] for path in paths) == {source_ids[0]: 2, source_ids[1]: 3}
+    assert paths[2]["source_path"] == 0
+    assert result["monte_carlo"]["mean"] == np.mean([path["pnl"] for path in paths])
+    assert "previews the median path" in Path(result["saved"]["html"]).read_text()
+    assert [Path(result["saved"]["paths"]).read_bytes() for result in (first, second)] == original

@@ -203,6 +203,11 @@ export class RunsService {
   jobs() { return this.queue.list(); }
   job(id: string) { return this.queue.get(id); }
 
+  combineBatch(batch: string) {
+    try { return this.queue.combineBatch(batch); }
+    catch (error) { throw new BadRequestException(error instanceof Error ? error.message : String(error)); }
+  }
+
   catalogue() {
     const python = existsSync(join(this.repo, ".venv", "bin", "python"))
       ? join(this.repo, ".venv", "bin", "python")

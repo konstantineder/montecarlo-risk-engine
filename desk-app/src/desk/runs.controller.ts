@@ -81,6 +81,9 @@ export class RunsController {
   @Get("jobs")
   jobs() { return this.runs.jobs(); }
 
+  @Post("jobs/batches/:id/combine")
+  combineBatch(@Param("id") id: string) { return this.runs.combineBatch(id); }
+
   @Post("runs/:id/reread")
   reread(@Param("id") id: string, @Body() body: Record<string, string>) {
     const job = this.runs.reread(id, body || {});

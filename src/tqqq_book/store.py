@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
 RUNS = Path(os.environ.get("RUNS_DIR") or Path(__file__).resolve().parents[2] / "runs").expanduser().resolve()
 
 
-def save_run(result: dict, paths: list[dict]) -> dict:
+def save_run(result: dict, paths: Iterable[dict] | Path) -> dict:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     folder = RUNS / f"{stamp}-s{result['config']['seed']}"
     extra = 2
@@ -19,9 +21,12 @@ def save_run(result: dict, paths: list[dict]) -> dict:
         extra += 1
     folder.mkdir(parents=True)
     paths_file = folder / "paths.jsonl"
-    with paths_file.open("w") as handle:
-        for row in paths:
-            handle.write(json.dumps(row) + "\n")
+    if isinstance(paths, Path):
+        shutil.copyfile(paths, paths_file)
+    else:
+        with paths_file.open("w") as handle:
+            for row in paths:
+                handle.write(json.dumps(row) + "\n")
     summary = {
         "id": folder.name,
         "created": stamp,

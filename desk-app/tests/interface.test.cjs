@@ -32,6 +32,10 @@ function setup(t, options = {}) {
       else if (url === '/api/runs/combined/series') value = [];
       else if (url === '/api/runs') value = [];
       else if (url === '/api/jobs') value = server.jobs;
+      else if (url === '/api/jobs/batches/old-batch/combine') {
+        server.jobs.push({id:'merged',batch:'merged-batch',sourceBatch:'old-batch',mode:'combined',configurationCount:2,config:DEFAULTS,configurations:[DEFAULTS,DEFAULTS],variations:{},status:'running',phase:'Combining saved results',progress:25,completedPaths:50,totalPaths:200,index:1,batchSize:1});
+        value={job:'merged',total:1};
+      }
       else if (url === '/api/simulate') {
         server.submitted = JSON.parse(init.body);
         const plan = planSimulations(server.submitted);
@@ -51,7 +55,7 @@ function setup(t, options = {}) {
 }
 
 test('form previews a Cartesian sweep, launches tiles, and follows jobs across tabs and refreshes', async (t) => {
-  const { dom, document, server, input } = setup(t);
+  const { dom, document, server, input } = setup(t, {config: {sweepMode:'separate', sweepModeVersion:2}});
   await waitFor(() => document.querySelector('button.run:not(:disabled)'));
   document.querySelector('details.advanced').open = true;
   const enabled = document.querySelector('#enable-ranges');
@@ -96,7 +100,7 @@ test('saved advanced settings fill the form and invalid increments prevent launc
   await waitFor(() => document.querySelector('button.run:not(:disabled)'));
   assert.equal(document.querySelector('[name="rate"]').value, '0.03');
   assert.equal(document.querySelector('details.advanced').open, true);
-  assert.match(document.querySelector('.launch-summary').textContent, /3 simulations/);
+  assert.match(document.querySelector('.launch-summary').textContent, /1 combined simulation.*3 configurations/);
   input(document.querySelector('[data-range="step"]'), '0');
   await waitFor(() => document.querySelector('.launch-summary.invalid'));
   assert.equal(document.querySelector('button.run').disabled, true);
@@ -164,4 +168,39 @@ test('combined results show one P&L distribution and filter paths by configurati
   filter.value = '2'; filter.dispatchEvent(new dom.window.Event('change', {bubbles:true}));
   assert.equal(pathTable.querySelectorAll('tbody tr').length, 1);
   assert.equal(pathTable.querySelectorAll('tbody td')[1].textContent, '2');
+});
+
+
+test('legacy separate preference migrates to combined with the control visible outside Advanced', async (t) => {
+  const config = { sweepEnabled: true, sweepMode: 'separate', ranges: [{parameter:'otm.0',from:0.03,to:0.08,step:0.01}] };
+  const {document,dom,server} = setup(t,{config});
+  await waitFor(()=>document.querySelector('button.run:not(:disabled)'));
+  document.querySelector('details.advanced').open = false;
+  const control = document.querySelector('[name="sweepMode"]');
+  assert.equal(control.value,'combined');
+  assert.equal(control.closest('details'),null);
+  assert.equal(control.closest('.sweep-output').hidden,false);
+  assert.match(document.querySelector('.launch-summary').textContent,/1 combined simulation.*600 paths/);
+  document.querySelector('form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
+  await waitFor(()=>document.querySelector('.job'));
+  assert.equal(server.submitted.sweepMode,'combined');
+  assert.equal(document.querySelectorAll('.job').length,1);
+  assert.equal(JSON.parse(dom.window.localStorage.getItem('desk-config')).sweepModeVersion,2);
+});
+
+
+test('completed separate batch offers one combined result without starting a new sweep', async (t) => {
+  const jobs=[1,2].map(index=>({id:'old-'+index,batch:'old-batch',index,batchSize:2,mode:'separate',config:DEFAULTS,variations:{},status:'done',run:'source-'+index,phase:'Completed',progress:100,completedPaths:100,totalPaths:100}));
+  const {document,server}=setup(t,{hash:'#/active',jobs});
+  await waitFor(()=>document.querySelector('.combine-results'));
+  const button=document.querySelector('.combine-results');
+  const host=button.parentElement.parentElement;
+  button.click();
+  await waitFor(()=>document.querySelector('.combine-results')?.disabled);
+  assert.equal(server.submitted,null);
+  const combined=server.jobs.find(job=>job.id==='merged');
+  combined.status='done'; combined.run='combined-result'; combined.progress=100;
+  await host.refresh();
+  const link=[...document.querySelectorAll('a')].find(link=>link.textContent==='Open combined results');
+  assert.equal(link.getAttribute('href'),'#/run/combined-result');
 });

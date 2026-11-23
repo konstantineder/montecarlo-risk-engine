@@ -129,7 +129,7 @@ function validate(cfg: Configuration) {
 }
 
 export function planSimulations(input: Record<string, unknown>) {
-  const mode = input.sweepMode ?? "separate";
+  const mode = input.sweepMode ?? (Array.isArray(input.ranges) && input.ranges.length ? "combined" : "separate");
   if (mode !== "separate" && mode !== "combined") throw new Error("Choose separate simulations or one combined simulation.");
   const base = { ...DEFAULTS };
   for (const key of Object.keys(base)) {

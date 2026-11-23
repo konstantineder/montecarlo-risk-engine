@@ -75,7 +75,7 @@ test('queue streams split progress events, isolates results, and runs one job at
     return child;
   };
   const queue = new SimulationQueue('/repo', root, launch);
-  const started = queue.enqueue({ paths: 2, ranges: [range('seed', 13, 14, 1)] });
+  const started = queue.enqueue({ sweepMode: 'separate', paths: 2, ranges: [range('seed', 13, 14, 1)] });
   assert.equal(started.total, 2);
   await turn();
   assert.equal(children.length, 1);
@@ -105,7 +105,7 @@ test('queue streams split progress events, isolates results, and runs one job at
 test('a spawn failure does not stall the remaining queue', async () => {
   let attempts = 0;
   const queue = new SimulationQueue('/repo', '/runs', () => { attempts++; throw new Error('Python missing'); });
-  queue.enqueue({ ranges: [range('seed', 1, 2, 1)] });
+  queue.enqueue({ sweepMode: 'separate', ranges: [range('seed', 1, 2, 1)] });
   await turn();
   assert.equal(attempts, 2);
   assert.ok(queue.list().every((job) => job.status === 'error'));
@@ -139,4 +139,44 @@ test('combined queue launches one worker with all configurations and one progres
   assert.equal(calls.length, 1);
   assert.equal(queue.get(started.job).status, 'done');
   assert.equal(queue.get(started.job).run, 'combined-result');
+});
+
+
+test('omitted output mode defaults ranges to one combined simulation', () => {
+  const plan=planSimulations({ranges:[range('otm.0',0.03,0.08,0.01)]});
+  assert.equal(plan.mode,'combined');
+  assert.equal(plan.simulationCount,1);
+  assert.equal(plan.totalPaths,600);
+  assert.equal(planSimulations({}).mode,'separate');
+});
+
+test('completed separate batches combine from saved runs and duplicate requests reuse the same job', async (t) => {
+  const root=mkdtempSync(join(tmpdir(),'tqqq-merge-queue-'));
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const children=[], inputs=[];
+  const queue=new SimulationQueue('/repo',root,(command,args)=>{
+    const child=new EventEmitter();
+    child.stdout=new PassThrough(); child.stderr=new PassThrough(); child.stdin=new PassThrough();
+    let body=''; child.stdin.on('data',chunk=>{body+=chunk.toString();});
+    child.stdin.on('finish',()=>inputs.push({args,body}));
+    children.push(child); return child;
+  });
+  const started=queue.enqueue({sweepMode:'separate',paths:2,ranges:[range('seed',1,2,1)]});
+  assert.throws(()=>queue.combineBatch(started.batch),/Complete the separate simulations/);
+  await turn();
+  for(let index=0;index<2;index++){
+    const run='source-'+index; mkdirSync(join(root,run)); writeFileSync(join(root,run,'summary.json'),'{}');
+    children[index].stdout.write('TQQQ_PROGRESS '+JSON.stringify({percent:100,completed:2,run})+'\n');
+    children[index].emit('close',0); await turn();
+  }
+  const merged=queue.combineBatch(started.batch);
+  const duplicate=queue.combineBatch(started.batch);
+  assert.equal(merged.job,duplicate.job);
+  await turn();
+  assert.equal(children.length,3);
+  assert.equal(queue.get(merged.job).totalPaths,4);
+  assert.equal(queue.get(merged.job).sourceBatch,started.batch);
+  assert.ok(inputs[0].args.includes('--saved-runs'));
+  assert.deepEqual(JSON.parse(inputs[0].body).runs,['source-0','source-1']);
+  children[2].emit('close',1);
 });

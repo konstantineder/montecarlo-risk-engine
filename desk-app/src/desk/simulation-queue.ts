@@ -21,6 +21,8 @@ export interface SimulationJob {
   mode: string;
   configurationCount: number;
   configurations?: Configuration[];
+  sourceRuns?: string[];
+  sourceBatch?: string;
   variations: Record<string, string>;
   run?: string;
   error?: string;
@@ -39,6 +41,20 @@ export class SimulationQueue {
 
   enqueueCombined(configurations: Record<string, unknown>[]) {
     return this.enqueuePlan(planCombinedConfigurations(configurations));
+  }
+
+  combineBatch(batch: string) {
+    const prior = this.list().find((job) => job.sourceBatch === batch && job.status !== "error");
+    if (prior) return { job: prior.id, batch: prior.batch, total: 1, configurationCount: prior.configurationCount, totalPaths: prior.totalPaths, mode: "combined" };
+    const jobs = this.list().filter((job) => job.batch === batch).sort((a, b) => a.index - b.index);
+    if (jobs.length < 2 || jobs.some((job) => job.status !== "done" || !job.run || job.mode === "combined")) {
+      throw new Error("Complete the separate simulations in this batch before combining their results.");
+    }
+    const started = this.enqueueCombined(jobs.map((job) => job.config));
+    const combined = this.jobs.get(started.job)!;
+    combined.sourceRuns = jobs.map((job) => job.run!);
+    combined.sourceBatch = batch;
+    return started;
   }
 
   private enqueuePlan(plan: ReturnType<typeof planSimulations>) {
@@ -92,6 +108,7 @@ export class SimulationQueue {
     try {
       const combined = job.mode === "combined";
       const args = combined ? ["-m", "tqqq_book.combined", "--progress"] : commandArguments(job.config);
+      if (job.sourceRuns) args.push("--saved-runs");
       const child = this.launch(existsSync(venv) ? venv : "python3", args, {
         cwd: this.repo,
         env: { ...process.env, PYTHONPATH: join(this.repo, "src"), RUNS_DIR: this.root, PYTHONUNBUFFERED: "1" },
@@ -125,7 +142,7 @@ export class SimulationQueue {
       });
       if (combined) {
         child.stdin?.on("error", () => undefined);
-        child.stdin?.end(JSON.stringify({ configurations: job.configurations }));
+        child.stdin?.end(JSON.stringify(job.sourceRuns ? { runs: job.sourceRuns } : { configurations: job.configurations }));
       }
     } catch (error) {
       finish(error instanceof Error ? error.message : String(error));
