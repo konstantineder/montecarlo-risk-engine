@@ -33,6 +33,7 @@ class Position:
     trend: float = 0.0
     drawdown: float = 0.0
     initial_iv: float = 0.71
+    max_shares: int = REF_LOTS * CONTRACT
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,12 @@ def _protective_strike(legs: list) -> float:
 
 def _covered_calls(legs: list) -> int:
     return sum(leg.qty * CONTRACT for leg in legs if leg.open and leg.side == "short" and leg.kind == "call")
+
+
+def short_put_capacity(shares: int, legs: list, max_shares: int) -> int:
+    """Reserve inventory for full assignment of every open short put."""
+    short_puts = sum(leg.qty for leg in legs if leg.open and leg.side == "short" and leg.kind == "put")
+    return max(0, (max_shares - shares) // CONTRACT - short_puts)
 
 
 @dataclass(frozen=True)
@@ -384,7 +391,7 @@ class WriteCalls:
 
 @dataclass(frozen=True)
 class ReplaceAssigned:
-    """While the long puts cover more than the shares, keep selling a short put under the spot."""
+    """Replace called-away shares, within both the hedge and initial inventory."""
 
     otm: float = 0.05
     tenor: int = 10
@@ -393,7 +400,8 @@ class ReplaceAssigned:
     def apply(self, position: Position) -> list[Order]:
         protected = sum(leg.qty for leg in position.legs if leg.open and leg.kind == "put" and leg.side == "long")
         short_puts = sum(leg.qty for leg in position.legs if leg.open and leg.kind == "put" and leg.side == "short")
-        room = protected - int(position.shares // CONTRACT) - short_puts
+        hedge_room = protected - (position.shares + CONTRACT - 1) // CONTRACT - short_puts
+        room = min(hedge_room, short_put_capacity(position.shares, position.legs, position.max_shares))
         position.assigned = []
         if room <= 0:
             return []
@@ -413,7 +421,7 @@ class ReplaceAssigned:
     def describe(self) -> dict:
         return {
             "name": self.name,
-            "says": "While the long puts cover more shares than you hold, sell a short put under the spot, and never above the long put.",
+            "says": "Replace called-away shares with short puts under spot and no higher than the long put. Shares plus all short-put assignment obligations cannot exceed the initial lots × 100; extra long puts do not increase that limit.",
             "otm": self.otm,
             "tenor": self.tenor,
         }

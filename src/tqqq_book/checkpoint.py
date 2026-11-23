@@ -9,6 +9,15 @@ import os
 from pathlib import Path
 
 
+# Strategy semantics changed: old paths and optimizer scores can contain
+# uncapped inventory. Keep those files, but recompute instead of reusing them.
+ENGINE_REVISION = 'inventory-cap-v1'
+
+
+def engine_folder(folder: Path | None) -> Path | None:
+    return folder / ENGINE_REVISION if folder else None
+
+
 class SimulationPaused(Exception):
     pass
 
@@ -36,7 +45,7 @@ def check_pause() -> None:
 
 class PathCheckpoint:
     def __init__(self, folder: Path | None, config: dict):
-        self.folder = folder
+        self.folder = engine_folder(folder)
         if folder:
             fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
             manifest = folder / 'manifest.json'

@@ -26,8 +26,8 @@ class _CombinedPaths:
     def __init__(self, folder: Path, total: int, max_days: int):
         self.total = total
         self.max_days = max_days
-        from tqqq_book.checkpoint import root
-        checkpoint = root()
+        from tqqq_book.checkpoint import engine_folder, root
+        checkpoint = engine_folder(root())
         self.source = (checkpoint / "combined.paths.jsonl") if checkpoint else folder / "paths.jsonl"
         self.source.parent.mkdir(parents=True, exist_ok=True)
         self.keys = set()

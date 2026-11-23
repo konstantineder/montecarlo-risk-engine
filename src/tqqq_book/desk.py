@@ -326,6 +326,14 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig, *, record_history: 
     day_trades: list[dict] = []
     strategy = cfg.strategy
     market_peak = float(path[0])
+    max_shares = cfg.lots * CONTRACT
+
+    def check_inventory() -> None:
+        obligated = sum(leg.qty * CONTRACT for leg in legs if leg.open and leg.kind == "put" and leg.side == "short")
+        if shares < 0 or shares + obligated > max_shares:
+            raise ValueError(f"Inventory limit exceeded: {shares} shares + {obligated} short-put shares > {max_shares}")
+
+    check_inventory()
 
     def settle(t: int, spot: float) -> None:
         nonlocal cash, shares, assignments
@@ -434,16 +442,17 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig, *, record_history: 
             })
             return
         if order.action == "sell_put":
-            if order.qty <= 0 or order.expiry <= t:
+            qty = min(order.qty, short_put_capacity(shares, legs, max_shares))
+            if qty <= 0 or order.expiry <= t:
                 return
             mark = _fast_price(spot, order.strike, (order.expiry - t) * DT, cfg.rate, sigma, "put")
             credit = max(0.0, mark - cfg.slippage)
-            cash += order.qty * CONTRACT * credit
-            legs.append(Leg("put", "short", order.strike, order.qty, order.expiry, credit, order.tag, otm=order.otm, tenor=order.tenor))
+            cash += qty * CONTRACT * credit
+            legs.append(Leg("put", "short", order.strike, qty, order.expiry, credit, order.tag, otm=order.otm, tenor=order.tenor))
             day_trades.append({
                 "rule": order.rule,
                 "action": "sell_put",
-                "qty": order.qty,
+                "qty": qty,
                 "strike": order.strike,
                 "expiry": order.expiry,
                 "premium": round(credit, 4),
@@ -515,7 +524,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig, *, record_history: 
                 "reason": order.reason,
             })
 
-    from tqqq_book.strategy import Position, rules_for
+    from tqqq_book.strategy import Position, rules_for, short_put_capacity
     rules = rules_for(cfg) if strategy == "wheel" else []
 
     def snap(at_spot: float, at_t: int, at_sigma: float) -> list[dict]:
@@ -564,6 +573,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig, *, record_history: 
         sigma = _iv_at(spot, cfg.spot, cfg.iv, cfg.iv_elasticity)
         before = snap(spot, t, sigma) if record_history else []
         settle(t, spot)
+        check_inventory()
         if day_trades and record_history:
             steps.append({"rule": "settle", "trades": list(day_trades), "before": before, "after": snap(spot, t, sigma)})
         if t < last and rules:
@@ -577,6 +587,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig, *, record_history: 
                 spot0=cfg.spot,
                 sigma=sigma,
                 shares=shares,
+                max_shares=max_shares,
                 legs=legs,
                 assigned=wheel,
                 rolled=rolled,
@@ -590,6 +601,7 @@ def _simulate(path: np.ndarray, book: dict, cfg: BookConfig, *, record_history: 
                 start = len(day_trades)
                 for order in rule.apply(position):
                     execute(order)
+                    check_inventory()
                 acted = len(day_trades) > start
                 if record_history:
                     rule_log.append({"name": rule.name, "acted": acted})
