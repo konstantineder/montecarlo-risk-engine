@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { join } from "path";
-import { commandArguments, Configuration, planSimulations, rangeValues } from "./simulation-plan";
+import { commandArguments, Configuration, planCombinedConfigurations, planSimulations, rangeValues } from "./simulation-plan";
 
 export interface SimulationJob {
   id: string;
@@ -18,6 +18,9 @@ export interface SimulationJob {
   started?: string;
   finished?: string;
   config: Configuration;
+  mode: string;
+  configurationCount: number;
+  configurations?: Configuration[];
   variations: Record<string, string>;
   run?: string;
   error?: string;
@@ -31,22 +34,35 @@ export class SimulationQueue {
   constructor(private readonly repo: string, private readonly root: string, private readonly launch: typeof spawn = spawn) {}
 
   enqueue(input: Record<string, unknown>) {
-    const plan = planSimulations(input);
+    return this.enqueuePlan(planSimulations(input));
+  }
+
+  enqueueCombined(configurations: Record<string, unknown>[]) {
+    return this.enqueuePlan(planCombinedConfigurations(configurations));
+  }
+
+  private enqueuePlan(plan: ReturnType<typeof planSimulations>) {
     const batch = randomUUID();
     const ids: string[] = [];
-    plan.configurations.forEach((config, index) => {
+    const combined = plan.mode === "combined";
+    const jobs = combined ? [plan.configurations[0]] : plan.configurations;
+    jobs.forEach((config, index) => {
       const id = randomUUID();
       ids.push(id);
       this.jobs.set(id, {
-        id, batch, index: index + 1, batchSize: plan.total,
+        id, batch, index: index + 1, batchSize: jobs.length,
+        mode: plan.mode, configurationCount: combined ? plan.total : 1,
+        ...(combined ? { configurations: plan.configurations } : {}),
         status: "queued", progress: 0, phase: "Queued",
-        completedPaths: 0, totalPaths: Number(config.paths),
+        completedPaths: 0, totalPaths: combined ? plan.totalPaths : Number(config.paths),
         created: new Date().toISOString(), config,
-        variations: rangeValues(config, plan.ranges.map((r) => r.parameter)), log: "",
+        variations: combined
+          ? Object.fromEntries(plan.ranges.map((r) => [r.parameter, `${r.values[0]} to ${r.values[r.count - 1]} (${r.count} values)`]))
+          : rangeValues(config, plan.ranges.map((r) => r.parameter)), log: "",
       });
     });
     queueMicrotask(() => this.pump());
-    return { job: ids[0], batch, total: plan.total };
+    return { job: ids[0], batch, total: jobs.length, configurationCount: plan.total, totalPaths: plan.totalPaths, mode: plan.mode };
   }
 
   list() { return [...this.jobs.values()].reverse(); }
@@ -74,10 +90,12 @@ export class SimulationQueue {
       queueMicrotask(() => this.pump());
     };
     try {
-      const child = this.launch(existsSync(venv) ? venv : "python3", commandArguments(job.config), {
+      const combined = job.mode === "combined";
+      const args = combined ? ["-m", "tqqq_book.combined", "--progress"] : commandArguments(job.config);
+      const child = this.launch(existsSync(venv) ? venv : "python3", args, {
         cwd: this.repo,
         env: { ...process.env, PYTHONPATH: join(this.repo, "src"), RUNS_DIR: this.root, PYTHONUNBUFFERED: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [combined ? "pipe" : "ignore", "pipe", "pipe"],
       });
       let pending = "";
       const line = (text: string) => {
@@ -105,6 +123,10 @@ export class SimulationQueue {
         else if (!job.run || !existsSync(join(this.root, job.run, "summary.json"))) finish("Simulation finished without a saved result.");
         else finish();
       });
+      if (combined) {
+        child.stdin?.on("error", () => undefined);
+        child.stdin?.end(JSON.stringify({ configurations: job.configurations }));
+      }
     } catch (error) {
       finish(error instanceof Error ? error.message : String(error));
     }

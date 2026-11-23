@@ -21,6 +21,8 @@ export interface RunCard {
   prob_loss: number;
   deployed: number;
   lots: number;
+  mode: string;
+  configuration_count: number;
 }
 
 @Injectable()
@@ -59,6 +61,8 @@ export class RunsService {
         prob_loss: mc.prob_loss || 0,
         deployed: raw.book?.deployed || 0,
         lots: cfg.lots || 0,
+        mode: cfg.mode || "separate",
+        configuration_count: cfg.configuration_count || 1,
       });
     }
     return cards.sort((a, b) => (a.created < b.created ? 1 : -1));
@@ -84,6 +88,7 @@ export class RunsService {
     if (!existsSync(file)) return null;
     return this.readLines(file, (row) => ({
       path: row.path,
+      configuration: row.configuration,
       pnl: row.pnl,
       ending_spot: row.ending_spot,
       min_spot: row.min_spot,
@@ -136,6 +141,8 @@ export class RunsService {
   private slimPath(row: any, kind: "mtm" | "book") {
     return {
       path: row.path,
+      configuration: row.configuration,
+      config: row.config,
       pnl: row.pnl,
       ending_spot: row.ending_spot,
       min_spot: row.min_spot,
@@ -209,7 +216,18 @@ export class RunsService {
   reread(id: string, body: Record<string, string>) {
     const run = this.get(id);
     if (!run) return null;
-    const cfg = run.config || {};
+    const overrides = Object.fromEntries(Object.entries(body).filter(([, value]) => value !== "" && value != null));
+    if (run.config?.mode === "combined") {
+      try {
+        return this.queue.enqueueCombined((run.configurations || []).map((group: any) => ({ ...this.configurationInput(group.config), ...overrides })));
+      } catch (error) {
+        throw new BadRequestException(error instanceof Error ? error.message : String(error));
+      }
+    }
+    return this.simulate({ ...this.configurationInput(run.config || {}), ...overrides });
+  }
+
+  private configurationInput(cfg: any): Record<string, string> {
     const sleeves = (cfg.put_sleeves || []).map((row: { weight: number; dte: number; roll_at: number }) =>
       `${Number((row.weight * 100).toPrecision(12))}:${row.dte}:${row.roll_at}`
     ).join(",");
@@ -222,8 +240,7 @@ export class RunsService {
       const name = names[p.key] || p.key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
       return [p.key, String(cfg[name] ?? p.value)];
     }));
-    const overrides = Object.fromEntries(Object.entries(body).filter(([, value]) => value !== "" && value != null));
-    return this.simulate({
+    return {
       ...scalarValues,
       strategy: cfg.strategy || "wheel",
       puts: sleeves || DEFAULTS.puts,
@@ -231,8 +248,7 @@ export class RunsService {
       contracts: tenors.map((row: { contracts: number; contracts_at_100?: number }) => row.contracts_at_100 ?? Math.round(row.contracts * 100 / (cfg.lots || 100))).join(",") || DEFAULTS.contracts,
       putRatioGrid: (cfg.put_ratio_grid || []).map((row: number[]) => `${row[0] * 100}:${row[1]}`).join(",") || DEFAULTS.putRatioGrid,
       rules: Array.isArray(cfg.rules) ? cfg.rules.join(",") : "",
-      ...overrides,
-    });
+    };
   }
 
   private aggregate(file: string) {

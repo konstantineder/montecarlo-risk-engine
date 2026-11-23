@@ -448,9 +448,9 @@ async function showHome(savedOnly = false) {
     btn.className = "sim";
     const cls = run.median < 0 ? "loss" : "gain";
     btn.innerHTML = `
-      <div class="when">${when(run.created)} · seed ${run.seed}</div>
+      <div class="when">${when(run.created)}${run.mode === "combined" ? " · combined run" : ` · seed ${run.seed}`}</div>
       <strong class="${cls}">${money(run.median)}</strong>
-      <div class="meta">${run.strategy} · ${run.paths} paths · ${run.lots} lots · ${run.horizon_days}d</div>
+      <div class="meta">${run.mode === "combined" ? `Combined · ${run.configuration_count} configurations` : `${run.strategy} · ${run.lots} lots`} · ${run.paths} paths · ${run.horizon_days}d</div>
       <div class="meta">p05 ${money(run.p05)} · p95 ${money(run.p95)} · loss ${pct(run.prob_loss)}</div>`;
     btn.addEventListener("click", () => { location.hash = `#/run/${run.id}`; });
     cards.append(btn);
@@ -472,12 +472,13 @@ async function showRun(id) {
   const mc = run.monte_carlo || {};
   const book = run.book || {};
   const cfg = run.config || {};
+  const combined = cfg.mode === "combined";
   app.innerHTML = "";
   const h = document.createElement("h1");
-  h.textContent = `${cfg.strategy || "wheel"} · ${cfg.lots || ""} lots`;
+  h.textContent = combined ? `Combined simulation · ${cfg.configuration_count} configurations` : `${cfg.strategy || "wheel"} · ${cfg.lots || ""} lots`;
   const lede = document.createElement("p");
   lede.className = "lede";
-  lede.textContent = `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d. Maximize any chart. Click a point or a row for the path.`;
+  lede.textContent = combined ? `${when(run.created)} · ${mc.paths} pooled paths · horizons ${cfg.horizon_range.join("–")}d. One P&L distribution across all configurations. Each path retains its own settings.` : `${when(run.created)} · seed ${cfg.seed} · ${mc.paths} paths · horizon ${cfg.horizon_days}d. Maximize any chart. Click a point or a row for the path.`;
   app.append(h, lede, exportBar(id));
   app.append(facts([
     ["Median P&L", money(mc.median)],
@@ -486,8 +487,8 @@ async function showRun(id) {
     ["95th", money(mc.p95)],
     ["Chance of a loss", pct(mc.prob_loss)],
     ["Median drawdown", money(mc.median_drawdown)],
-    ["Deployed", money(book.deployed)],
-    ["Floor", money(book.floor)],
+    [combined ? "Average deployed" : "Deployed", money(book.deployed)],
+    [combined ? "Average opening floor" : "Floor", money(book.floor)],
   ]));
 
   const rulesTitle = document.createElement("h2");
@@ -511,14 +512,15 @@ async function showRun(id) {
       reread.disabled = false;
     }
   });
-  app.append(rulesTitle, rulesNote, ruleSnapshot(run.rules), reread, status);
+  if (combined) app.append(combinedConfigurations(run), reread, status);
+  else app.append(rulesTitle, rulesNote, ruleSnapshot(run.rules), reread, status);
 
   const grid = document.createElement("div");
   grid.className = "chart-grid";
   const ribbon = run.ribbon || [];
   if (ribbon.length) {
     grid.append(
-      chartCard("Spot band", "5th to 95th across every path. Line is the median.", bandChart(ribbon, "spot_p05", "spot_p50", "spot_p95")),
+      chartCard("Spot band", combined ? "5th to 95th of paths still active on each day. Line is the median." : "5th to 95th across every path. Line is the median.", bandChart(ribbon, "spot_p05", "spot_p50", "spot_p95")),
       chartCard("P&L band", "5th to 95th. Dashed line is zero.", bandChart(ribbon, "pnl_p05", "pnl_p50", "pnl_p95", { zero: true, money: true })),
       chartCard("Mark to market", "5th to 95th of cash plus marks.", bandChart(ribbon, "mtm_p05", "mtm_p50", "mtm_p95", { money: true })),
     );
@@ -526,7 +528,7 @@ async function showRun(id) {
   if (series.length) {
     grid.append(
       chartCard(
-        "Position, median path",
+        combined ? "Position, pooled median" : "Position, median path",
         "Contracts. Shares are divided by 100 so they sit next to the puts.",
         multiChart(series, [
           { key: "shares", color: "#5b4b8a", label: "shares ÷ 100" },
@@ -568,17 +570,23 @@ async function showRun(id) {
   note.textContent = "Sorted by P&L. Click a row for the day-by-day book.";
   app.append(pathTitle, note);
   let key = "pnl", dir = -1;
+  const filter = document.createElement("select");
+  if (combined) {
+    filter.setAttribute("aria-label", "Path configuration");
+    filter.innerHTML = '<option value="">All configurations</option>' + (run.configurations || []).map((g) => `<option value="${g.id}">Configuration ${g.id}</option>`).join("");
+    app.append(filter);
+  }
   const host = document.createElement("div");
   app.append(host);
   const draw = () => {
-    const ordered = paths.slice().sort((a, b) => (a[key] - b[key]) * dir);
+    const ordered = paths.filter((p) => !combined || !filter.value || p.configuration === Number(filter.value)).sort((a, b) => (a[key] - b[key]) * dir);
     host.replaceChildren(table(
-      ["Index", "Spot", "P&L", "Min spot", "Drawdown", "Shares", "Trades"],
-      ordered.map((r) => [String(r.path), px(r.ending_spot), money(r.pnl), px(r.min_spot), money(r.max_dd), String(r.ending_shares), String(r.trades)]),
+      ["Index", ...(combined ? ["Configuration"] : []), "Spot", "P&L", "Min spot", "Drawdown", "Shares", "Trades"],
+      ordered.map((r) => [String(r.path), ...(combined ? [String(r.configuration)] : []), px(r.ending_spot), money(r.pnl), px(r.min_spot), money(r.max_dd), String(r.ending_shares), String(r.trades)]),
       (i) => { location.hash = `#/run/${id}/path/${ordered[i].path}`; }
     ));
     host.querySelectorAll("th").forEach((th, i) => {
-      const map = ["path", "ending_spot", "pnl", "min_spot", "max_dd", "ending_shares", "trades"];
+      const map = ["path", ...(combined ? ["configuration"] : []), "ending_spot", "pnl", "min_spot", "max_dd", "ending_shares", "trades"];
       th.addEventListener("click", () => {
         dir = key === map[i] ? dir * -1 : (map[i] === "path" ? 1 : -1);
         key = map[i];
@@ -586,6 +594,7 @@ async function showRun(id) {
       });
     });
   };
+  filter.addEventListener("change", draw);
   draw();
 }
 
@@ -624,10 +633,10 @@ async function showPath(id, index) {
   const days = row.days || [];
   app.innerHTML = "";
   const h = document.createElement("h1");
-  h.textContent = `Path ${index}`;
+  h.textContent = `Path ${index}${row.configuration ? ` · configuration ${row.configuration}` : ""}`;
   const lede = document.createElement("p");
   lede.className = "lede";
-  lede.textContent = "Spot, P&L, the cover, and the open shorts. Click a day for the book before and after each rule.";
+  lede.textContent = row.config ? `${row.config.lots} lots · ${row.config.horizon_days} days · seed ${row.config.seed} · call OTM ${row.config.tenors.map((t) => t.otm).join(", ")}. Click a day for the book before and after each rule.` : "Spot, P&L, the cover, and the open shorts. Click a day for the book before and after each rule.";
   app.append(h, lede, exportBar(id), facts([
     ["End spot", px(row.ending_spot)],
     ["P&L", money(row.pnl)],

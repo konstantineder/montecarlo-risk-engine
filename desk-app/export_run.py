@@ -50,7 +50,7 @@ def main() -> None:
                 index, path.get("pnl"), path.get("ending_spot"), path.get("min_spot"),
                 path.get("max_dd"), path.get("ending_shares"), path.get("assignments"),
                 path.get("new_calls"), path.get("buybacks"), path.get("roll_cash"),
-                path.get("floor_after"), trade_count,
+                path.get("floor_after"), trade_count, path.get("configuration"),
             ])
             for day in path.get("days") or []:
                 day_trades = day.get("trades") or []
@@ -76,10 +76,18 @@ def main() -> None:
                     rule_rows.append([index, day.get("day"), rule.get("name"), cell(rule.get("acted"))])
 
     out = zipfile.ZipFile(sys.stdout.buffer, "w", zipfile.ZIP_DEFLATED)
+    if summary.get("configurations"):
+        configuration_rows = [
+            [group["id"], section, key, json.dumps(value) if isinstance(value, (dict, list)) else value]
+            for group in summary["configurations"]
+            for section in ("config", "book", "monte_carlo", "rules", "vol")
+            for key, value in (group[section].items() if isinstance(group[section], dict) else [("rules", group[section])])
+        ]
+        out.writestr("configurations.csv", rows(["configuration", "section", "key", "value"], configuration_rows))
     out.writestr("summary.csv", rows(["section", "key", "value"], summary_rows))
     out.writestr("paths.csv", rows(
         ["path", "pnl", "ending_spot", "min_spot", "max_dd", "ending_shares",
-         "assignments", "new_calls", "buybacks", "roll_cash", "floor_after", "trades"],
+         "assignments", "new_calls", "buybacks", "roll_cash", "floor_after", "trades", "configuration"],
         paths,
     ))
     out.writestr("days.csv", rows(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 from pathlib import Path
 
 
@@ -94,6 +95,8 @@ def _slim(paths: list[dict]) -> list[dict]:
         last = row["days"][-1] if row.get("days") else {}
         kept.append({
             "path": row["path"],
+            "configuration": row.get("configuration"),
+            "config": row.get("config"),
             "pnl": row["pnl"],
             "ending_spot": row["ending_spot"],
             "min_spot": row["min_spot"],
@@ -126,6 +129,7 @@ def write_report(result: dict, path: str | Path) -> str:
         f"<td>{leg['priced_by']}</td></tr>"
         for leg in [*book["puts"], *book["calls"]]
     )
+    combined = cfg.get("mode") == "combined"
     facts = [
         ("Deployed", _money(book["deployed"])),
         ("Put premium", _money(book["put_premium"])),
@@ -141,13 +145,27 @@ def write_report(result: dict, path: str | Path) -> str:
         ("Chance of a loss", f"{mc['prob_loss']:.0%}"),
         ("Median drawdown", _money(mc["median_drawdown"])),
     ]
+    if combined:
+        facts = [
+            ("Configurations", str(cfg["configuration_count"])), ("Total paths", str(mc["paths"])),
+            ("Average deployed", _money(book["deployed"])), ("Average floor", _money(book["floor"])),
+            ("Median P&L", _money(mc["median"])), ("Mean P&L", _money(mc["mean"])),
+            ("5th pct", _money(mc["p05"])), ("95th pct", _money(mc["p95"])),
+            ("Chance of a loss", f"{mc['prob_loss']:.0%}"),
+        ]
+    configurations = "".join(
+        f"<details><summary>Configuration {group['id']} · {group['config']['paths']} paths · median {_money(group['monte_carlo']['median'])}</summary>"
+        f"<pre>{escape(json.dumps({key: group[key] for key in ('config', 'book', 'rules')}, indent=2))}</pre></details>"
+        for group in result.get("configurations", [])
+    )
     cards = "".join(f'<div class="fact"><span>{label}</span><strong>{value}</strong></div>' for label, value in facts)
     opening = "".join(
         f"<tr><td>{trade['action']}</td><td>{trade['qty']}</td><td>{trade['strike']:.0f}</td><td>{trade['expiry']}</td><td>{trade['premium']:.2f}</td><td>{trade['tag']}</td></tr>"
         for trade in book.get("opening_trades", [])
     )
     rule_rows = []
-    for rule in result.get("rules") or [{"name": "hold", "says": "Keep the opening book. No new orders.",}]:
+    default_rule = {"name": "Configuration-specific", "says": "Rules and settings are retained in each configuration and path."} if combined else {"name": "hold", "says": "Keep the opening book. No new orders."}
+    for rule in result.get("rules") or [default_rule]:
         knobs = " ".join(f"{key} {value}" for key, value in rule.items() if key not in ("name", "says"))
         rule_rows.append(f"<tr><td>{rule['name']}</td><td>{rule['says']}</td><td>{knobs}</td></tr>")
     payload = json.dumps({"paths": paths, "selected": selected}, separators=(",", ":")).replace("<", "\\u003c")
@@ -187,11 +205,12 @@ def write_report(result: dict, path: str | Path) -> str:
 </head>
 <body>
 <main>
-  <p>TQQQ · __LOTS__ lots · model marks, not an order</p>
+  <p>__RUN_LABEL__ · model marks, not an order</p>
   <h1>Path desk</h1>
   <p>__NOTE__</p>
   <p>__VOL__</p>
   <div class="facts">__CARDS__</div>
+  __CONFIGURATIONS__
   <section>
     <h2>Rules</h2>
     <p>strategy.apply walks these in order. A trade on a path names the rule that made it.</p>
@@ -333,7 +352,7 @@ function renderPaths() {
     const tr = document.createElement("tr");
     if (current && row.path === current.path) tr.className = "on";
     tr.append(
-      cell(String(row.path)),
+      cell(String(row.path) + (row.configuration ? " (configuration " + row.configuration + ")" : "")),
       cell(px(row.ending_spot)),
       cell(money(row.pnl)),
       cell(money(row.mtm)),
@@ -625,6 +644,7 @@ function renderDays() {
   charts.append(spotCard, pnlCard, coverCard, shortCard);
   [
     ["Index", String(current.path)],
+    ["Configuration", current.configuration ? String(current.configuration) : "Fixed"],
     ["End spot", px(current.ending_spot)],
     ["P&L", money(current.pnl)],
     ["MTM", money(current.mtm)],
@@ -705,7 +725,8 @@ renderDays();
     replacements = {
         "__DTE__": str(cfg["put_dte"]),
         "__DAYS__": str(cfg["path_days"]),
-        "__LOTS__": str(cfg["lots"]),
+        "__RUN_LABEL__": f"Combined simulation · {cfg['configuration_count']} configurations · {mc['paths']} paths" if combined else f"TQQQ · {cfg['lots']} lots",
+        "__CONFIGURATIONS__": f"<section><h2>Configurations</h2>{configurations}</section>" if combined else "",
         "__NOTE__": result["note"],
         "__VOL__": vol.get("note", ""),
         "__CARDS__": cards,

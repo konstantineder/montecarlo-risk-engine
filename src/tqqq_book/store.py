@@ -27,6 +27,7 @@ def save_run(result: dict, paths: list[dict]) -> dict:
         "created": stamp,
         "note": result["note"],
         "config": result["config"],
+        **({"configurations": result["configurations"]} if "configurations" in result else {}),
         "book": result["book"],
         "monte_carlo": result["monte_carlo"],
         "vol": result["vol"],

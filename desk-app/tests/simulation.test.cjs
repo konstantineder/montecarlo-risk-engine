@@ -17,6 +17,15 @@ test('decimal range includes all four values and changes only the selected tenor
   assert.deepEqual(plan.configurations.map((c) => c.otm), ['0.2,0.05,0.08,0.10', '0.3,0.05,0.08,0.10', '0.4,0.05,0.08,0.10', '0.5,0.05,0.08,0.10']);
 });
 
+test('combined mode previews one simulation with six hundred pooled paths', () => {
+  const plan = planSimulations({ sweepMode: 'combined', ranges: [range('otm.0', 0.03, 0.08, 0.01)] });
+  assert.equal(plan.total, 6);
+  assert.equal(plan.simulationCount, 1);
+  assert.equal(plan.totalPaths, 600);
+  assert.equal(plan.mode, 'combined');
+  assert.throws(() => planSimulations({ sweepMode: 'unknown' }));
+});
+
 test('ranges multiply across call contracts, model settings and rule settings', () => {
   const plan = planSimulations({ ranges: [range('contracts.3', 8, 10, 1), range('iv', 0.6, 0.7, 0.1), range('writeEvery', 4, 6, 2)] });
   assert.equal(plan.total, 12);
@@ -100,4 +109,34 @@ test('a spawn failure does not stall the remaining queue', async () => {
   await turn();
   assert.equal(attempts, 2);
   assert.ok(queue.list().every((job) => job.status === 'error'));
+});
+
+test('combined queue launches one worker with all configurations and one progress total', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'tqqq-combined-queue-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const calls = [];
+  const child = new EventEmitter();
+  child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
+  let input = '';
+  child.stdin.on('data', (chunk) => { input += chunk.toString(); });
+  const queue = new SimulationQueue('/repo', root, (...args) => { calls.push(args); return child; });
+  const started = queue.enqueue({ sweepMode: 'combined', ranges: [range('otm.0', 0.03, 0.08, 0.01)] });
+  await turn();
+  assert.equal(started.total, 1);
+  assert.equal(started.configurationCount, 6);
+  assert.equal(queue.list().length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1][1], 'tqqq_book.combined');
+  assert.equal(JSON.parse(input).configurations.length, 6);
+  assert.equal(queue.get(started.job).totalPaths, 600);
+  child.stdout.write('TQQQ_PROGRESS {"percent":35.5,"phase":"Configuration 3/6","completed":213}\n');
+  assert.equal(queue.get(started.job).completedPaths, 213);
+  mkdirSync(join(root, 'combined-result'));
+  writeFileSync(join(root, 'combined-result', 'summary.json'), '{}');
+  child.stdout.write('TQQQ_PROGRESS {"percent":100,"run":"combined-result","completed":600}\n');
+  child.emit('close', 0);
+  await turn();
+  assert.equal(calls.length, 1);
+  assert.equal(queue.get(started.job).status, 'done');
+  assert.equal(queue.get(started.job).run, 'combined-result');
 });

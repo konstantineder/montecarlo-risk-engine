@@ -139,6 +139,8 @@ td.trades { color: var(--accent); white-space: normal; }
 .remove-range { padding: 9px 0; color: var(--brick); }
 .launch-summary { border-radius: 8px; background: #f3eef8; padding: 10px 12px; color: var(--accent); overflow-wrap: anywhere; }
 .launch-summary.invalid { color: var(--brick); background: #fff0ee; }
+.sweep-output { max-width: 620px; margin: 14px 0; }
+.configuration-data { max-height: 360px; overflow: auto; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .batch { margin: 14px 0 24px; }
 .batch h2 { margin: 12px 0 8px; }
 progress { display: block; width: 100%; height: 9px; border: 0; border-radius: 99px; overflow: hidden; accent-color: var(--accent); background: #eeeaf4; margin: 10px 0; }

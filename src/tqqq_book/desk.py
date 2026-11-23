@@ -647,11 +647,13 @@ def _summary(name: str, rows: list[dict]) -> dict:
 def _ribbon(spots: np.ndarray, navs: np.ndarray, trade_counts: np.ndarray) -> list[dict]:
     rows = []
     for day in range(spots.shape[1]):
-        spot = spots[:, day]
-        pnl = navs[:, day]
-        trades = trade_counts[:, day]
+        active = np.isfinite(spots[:, day]) & np.isfinite(navs[:, day])
+        spot = spots[active, day]
+        pnl = navs[active, day]
+        trades = trade_counts[active, day]
         rows.append({
             "day": day,
+            "active_paths": int(active.sum()),
             "price_p05": float(np.quantile(spot, 0.05)),
             "price_p50": float(np.quantile(spot, 0.50)),
             "price_p95": float(np.quantile(spot, 0.95)),
@@ -672,6 +674,7 @@ def _median_path(paths: list[dict]) -> dict:
     chosen = min(paths, key=lambda row: abs(row["pnl"] - target))
     return {
         "path": chosen["path"],
+        **({"configuration": chosen["configuration"]} if "configuration" in chosen else {}),
         "pnl": chosen["pnl"],
         "max_dd": chosen["max_dd"],
         "ending_shares": chosen["ending_shares"],
@@ -721,7 +724,7 @@ def _vol_view(cfg: BookConfig) -> dict:
     }
 
 
-def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None = None) -> dict:
+def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None = None, *, persist: bool = True) -> dict:
     cfg = cfg or BookConfig()
     if cfg.paths < 1 or cfg.horizon_days < 1:
         raise ValueError("paths and horizon days must be at least 1")
@@ -846,6 +849,8 @@ def run(cfg: BookConfig | None = None, progress: Callable[[dict], None] | None =
         row["mtm_p05"] = float(np.quantile(mtm[:, day], 0.05))
         row["mtm_p50"] = float(np.quantile(mtm[:, day], 0.50))
         row["mtm_p95"] = float(np.quantile(mtm[:, day], 0.95))
+    if not persist:
+        return {**result, "_paths": paths}
     from tqqq_book.report import write_report
     from tqqq_book.store import save_run
     notify("Saving paths", 94, cfg.paths)
@@ -915,7 +920,7 @@ def config_from_mapping(raw: dict | None = None) -> BookConfig:
                 return raw[name]
         return default
 
-    sleeves = raw.get("putSleeves", raw.get("put_sleeves"))
+    sleeves = raw.get("putSleeves", raw.get("put_sleeves", raw.get("puts")))
     if isinstance(sleeves, str) and sleeves.strip():
         put_sleeves = parse_put_sleeves(sleeves)
     else:

@@ -129,6 +129,8 @@ function validate(cfg: Configuration) {
 }
 
 export function planSimulations(input: Record<string, unknown>) {
+  const mode = input.sweepMode ?? "separate";
+  if (mode !== "separate" && mode !== "combined") throw new Error("Choose separate simulations or one combined simulation.");
   const base = { ...DEFAULTS };
   for (const key of Object.keys(base)) {
     if (input[key] !== undefined) base[key] = String(input[key]).trim();
@@ -164,9 +166,20 @@ export function planSimulations(input: Record<string, unknown>) {
   }
   for (const cfg of configurations) validate(cfg);
   return {
-    configurations, ranges, total,
+    configurations, ranges, total, mode,
+    simulationCount: mode === "combined" ? 1 : total,
     totalPaths: configurations.reduce((n, cfg) => n + Number(cfg.paths), 0),
     parameters,
+  };
+}
+
+export function planCombinedConfigurations(configurations: Record<string, unknown>[]) {
+  if (!configurations.length || configurations.length > MAX_SIMULATIONS) throw new Error("A combined simulation needs between 1 and 1,000 configurations.");
+  const plans = configurations.map((config) => planSimulations({ ...config, ranges: [], sweepMode: "separate" }));
+  return {
+    ...plans[0], mode: "combined", simulationCount: 1,
+    total: plans.length, configurations: plans.map((plan) => plan.configurations[0]), ranges: [],
+    totalPaths: plans.reduce((sum, plan) => sum + plan.totalPaths, 0),
   };
 }
 
